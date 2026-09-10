@@ -8,6 +8,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await loadCarsFromLocalStorage();
   await loadBookingsFromLocalStorage();
+  await loadReadNotificationsFromLocalStorage();
   runApp(const MaterialApp(
     debugShowCheckedModeBanner: false,
     home: AddCar(),

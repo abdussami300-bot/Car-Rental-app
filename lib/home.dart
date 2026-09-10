@@ -11,6 +11,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await loadCarsFromLocalStorage();
   await loadBookingsFromLocalStorage();
+  await loadReadNotificationsFromLocalStorage();
   runApp(const MyApp());
 }
 
@@ -67,6 +68,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _loadStoredData() async {
     await loadCarsFromLocalStorage();
     await loadBookingsFromLocalStorage();
+    await loadReadNotificationsFromLocalStorage();
     if (mounted) {
       setState(() {});
     }
@@ -478,31 +480,18 @@ class _HomePageState extends State<HomePage> {
         ),
         actions: [
           IconButton(
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(_isOwnerMode
-                      ? (userBookingsList.isNotEmpty
-                          ? "📢 You have ${userBookingsList.length} active rental bookings to manage!"
-                          : "No new rental requests")
-                      : (userBookingsList.isNotEmpty
-                          ? "🚗 You have ${userBookingsList.length} active rental bookings"
-                          : "No new notifications")),
-                  duration: const Duration(seconds: 2),
-                  backgroundColor: AppTheme.primary,
-                ),
-              );
-            },
+            onPressed: () => _showNotificationsSheet(context),
             icon: Stack(
+              clipBehavior: Clip.none,
               children: [
                 const Icon(Icons.notifications_none),
-                if (userBookingsList.isNotEmpty)
+                if (getUnreadNotificationCount(isOwner: _isOwnerMode, userEmail: widget.email) > 0)
                   Positioned(
-                    right: 0,
-                    top: 0,
+                    right: -2,
+                    top: -2,
                     child: Container(
-                      width: 8,
-                      height: 8,
+                      width: 9,
+                      height: 9,
                       decoration: const BoxDecoration(
                         color: Colors.redAccent,
                         shape: BoxShape.circle,
@@ -596,6 +585,376 @@ class _HomePageState extends State<HomePage> {
               ],
       ),
     );
+  }
+
+  // ================= NOTIFICATIONS BOTTOM SHEET =================
+  void _showNotificationsSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final notifs = getLiveNotificationsForUser(
+              isOwner: _isOwnerMode,
+              userEmail: widget.email,
+            );
+            final unreadCount = notifs.where((n) => !n.isRead).length;
+
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.75,
+              decoration: const BoxDecoration(
+                color: Color(0xFF181818),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                border: Border(top: BorderSide(color: Colors.white12)),
+              ),
+              child: Column(
+                children: [
+                  const SizedBox(height: 12),
+                  Container(
+                    width: 45,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white24,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: AppTheme.primary.withOpacity(0.15),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.notifications_active,
+                                color: AppTheme.primary,
+                                size: 20,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            const Text(
+                              "Notifications",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            if (unreadCount > 0) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.redAccent,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  "$unreadCount New",
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+
+                        if (unreadCount > 0)
+                          TextButton(
+                            onPressed: () async {
+                              await markAllNotificationsAsReadForUser(
+                                isOwner: _isOwnerMode,
+                                userEmail: widget.email,
+                              );
+                              setSheetState(() {});
+                              setState(() {});
+                            },
+                            child: const Text(
+                              "Mark all read",
+                              style: TextStyle(
+                                color: AppTheme.primaryLight,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          )
+                        else
+                          IconButton(
+                            icon: const Icon(Icons.close, color: Colors.grey, size: 20),
+                            onPressed: () => Navigator.pop(sheetContext),
+                          ),
+                      ],
+                    ),
+                  ),
+
+                  const Divider(color: Colors.white12, height: 20),
+
+                  Expanded(
+                    child: notifs.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.notifications_off_outlined, size: 48, color: Colors.grey[600]),
+                                const SizedBox(height: 12),
+                                const Text(
+                                  "No Notifications Yet",
+                                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                                ),
+                                const SizedBox(height: 6),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                                  child: Text(
+                                    _isOwnerMode
+                                        ? "New rental requests and fleet updates will appear here."
+                                        : "Booking confirmations and trip updates will appear here.",
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(color: Colors.grey[400], fontSize: 13),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            itemCount: notifs.length,
+                            separatorBuilder: (context, index) => const SizedBox(height: 10),
+                            itemBuilder: (context, index) {
+                              final notif = notifs[index];
+                              return _buildNotificationCard(notif, sheetContext, setSheetState);
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildNotificationCard(
+    AppNotification notif,
+    BuildContext sheetContext,
+    void Function(void Function()) setSheetState,
+  ) {
+    Color iconBg;
+    Color iconColor;
+    IconData iconData;
+
+    switch (notif.type) {
+      case "request":
+        iconBg = Colors.amber.withOpacity(0.15);
+        iconColor = Colors.amber;
+        iconData = Icons.pending_actions;
+        break;
+      case "accepted":
+        iconBg = Colors.green.withOpacity(0.15);
+        iconColor = Colors.greenAccent;
+        iconData = Icons.check_circle_outline;
+        break;
+      case "declined":
+        iconBg = Colors.redAccent.withOpacity(0.15);
+        iconColor = Colors.redAccent;
+        iconData = Icons.cancel_outlined;
+        break;
+      case "completed":
+        iconBg = Colors.cyan.withOpacity(0.15);
+        iconColor = Colors.cyanAccent;
+        iconData = Icons.celebration_outlined;
+        break;
+      case "car_listed":
+        iconBg = AppTheme.primary.withOpacity(0.15);
+        iconColor = AppTheme.primary;
+        iconData = Icons.directions_car;
+        break;
+      default:
+        iconBg = Colors.blue.withOpacity(0.15);
+        iconColor = Colors.lightBlueAccent;
+        iconData = Icons.info_outline;
+    }
+
+    return InkWell(
+      onTap: () async {
+        if (!notif.isRead) {
+          await markNotificationAsRead(notif.id);
+          setSheetState(() {});
+          setState(() {});
+        }
+
+        Navigator.pop(sheetContext);
+
+        if (_isOwnerMode) {
+          if (notif.type == "request" || notif.type == "accepted" || notif.type == "completed") {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const OwnerBookingsScreen()),
+            ).then((_) => setState(() {}));
+          } else if (notif.type == "car_listed") {
+            setState(() {
+              _currentIndex = 2; // My Fleet tab
+            });
+          }
+        } else {
+          // Customer mode
+          if (notif.type == "request" || notif.type == "accepted" || notif.type == "declined" || notif.type == "completed") {
+            setState(() {
+              _currentIndex = 2; // Booking tab
+            });
+          }
+        }
+      },
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: notif.isRead ? const Color(0xFF1F1F1F) : const Color(0xFF262626),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: notif.isRead ? Colors.white10 : AppTheme.primary.withOpacity(0.4),
+            width: notif.isRead ? 1 : 1.5,
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: iconBg,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(iconData, color: iconColor, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          notif.title,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: notif.isRead ? FontWeight.w600 : FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      if (!notif.isRead)
+                        Container(
+                          width: 8,
+                          height: 8,
+                          margin: const EdgeInsets.only(left: 6),
+                          decoration: const BoxDecoration(
+                            color: AppTheme.primary,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    notif.message,
+                    style: TextStyle(
+                      color: Colors.grey[300],
+                      fontSize: 12,
+                      height: 1.3,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        _formatNotificationTime(notif.timestamp),
+                        style: TextStyle(color: Colors.grey[500], fontSize: 11),
+                      ),
+                      if (notif.type == "request" && _isOwnerMode)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                "Manage in Hub",
+                                style: TextStyle(
+                                  color: AppTheme.primaryLight,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              SizedBox(width: 3),
+                              Icon(Icons.arrow_forward_ios, color: AppTheme.primaryLight, size: 9),
+                            ],
+                          ),
+                        )
+                      else if ((notif.type == "accepted" || notif.type == "request") && !_isOwnerMode)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: Colors.green.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                "View Bookings",
+                                style: TextStyle(
+                                  color: Colors.greenAccent,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              SizedBox(width: 3),
+                              Icon(Icons.arrow_forward_ios, color: Colors.greenAccent, size: 9),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatNotificationTime(DateTime time) {
+    final now = DateTime.now();
+    final diff = now.difference(time);
+    if (diff.inMinutes < 1) {
+      return "Just now";
+    } else if (diff.inMinutes < 60) {
+      return "${diff.inMinutes}m ago";
+    } else if (diff.inHours < 24) {
+      return "${diff.inHours}h ago";
+    } else {
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      return "${time.day} ${months[time.month - 1]}";
+    }
   }
 
   Widget _buildCurrentTab() {
@@ -3054,14 +3413,7 @@ class _HomePageState extends State<HomePage> {
             icon: Icons.notifications_none,
             title: "Notifications",
             subtitle: "Booking reminders & trip alerts",
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text("No new notifications"),
-                  duration: Duration(seconds: 1),
-                ),
-              );
-            },
+            onTap: () => _showNotificationsSheet(context),
           ),
           _buildProfileOption(
             icon: Icons.settings_outlined,

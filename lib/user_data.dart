@@ -215,6 +215,61 @@ class BookingItem {
   }
 }
 
+// ================= NOTIFICATION DATA MODEL =================
+class AppNotification {
+  final String id;
+  final String title;
+  final String message;
+  final DateTime timestamp;
+  final String type; // 'request', 'accepted', 'declined', 'completed', 'car_listed', 'welcome'
+  final String forRole; // 'owner' or 'customer' or 'all'
+  final String? targetBookingId;
+  final String? targetCarName;
+  bool isRead;
+
+  AppNotification({
+    required this.id,
+    required this.title,
+    required this.message,
+    required this.timestamp,
+    required this.type,
+    this.forRole = "all",
+    this.targetBookingId,
+    this.targetCarName,
+    this.isRead = false,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      "id": id,
+      "title": title,
+      "message": message,
+      "timestamp": timestamp.toIso8601String(),
+      "type": type,
+      "forRole": forRole,
+      "targetBookingId": targetBookingId,
+      "targetCarName": targetCarName,
+      "isRead": isRead,
+    };
+  }
+
+  factory AppNotification.fromJson(Map<String, dynamic> json) {
+    return AppNotification(
+      id: json["id"]?.toString() ?? "",
+      title: json["title"]?.toString() ?? "",
+      message: json["message"]?.toString() ?? "",
+      timestamp: json["timestamp"] != null
+          ? DateTime.tryParse(json["timestamp"]) ?? DateTime.now()
+          : DateTime.now(),
+      type: json["type"]?.toString() ?? "general",
+      forRole: json["forRole"]?.toString() ?? "all",
+      targetBookingId: json["targetBookingId"]?.toString(),
+      targetCarName: json["targetCarName"]?.toString(),
+      isRead: json["isRead"] == true,
+    );
+  }
+}
+
 // ================= DEFAULT DEMO FLEET =================
 final List<CarItem> defaultInitialCars = [
   const CarItem(
@@ -486,4 +541,220 @@ Future<void> loadBookingsFromLocalStorage() async {
   } catch (e) {
     debugPrint("❌ Failed to load bookings from storage: $e");
   }
+}
+
+// ================= NOTIFICATIONS LOGIC & STATE =================
+final Set<String> readNotificationIds = {};
+const String _kReadNotifsStorageKey = "saved_read_notifs_v2";
+
+Future<void> saveReadNotificationsToLocalStorage() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_kReadNotifsStorageKey, readNotificationIds.toList());
+  } catch (e) {
+    debugPrint("❌ Failed to save read notification IDs: $e");
+  }
+}
+
+Future<void> loadReadNotificationsFromLocalStorage() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList(_kReadNotifsStorageKey);
+    if (list != null) {
+      readNotificationIds.clear();
+      readNotificationIds.addAll(list);
+    }
+  } catch (e) {
+    debugPrint("❌ Failed to load read notification IDs: $e");
+  }
+}
+
+List<AppNotification> getLiveNotificationsForUser({
+  required bool isOwner,
+  required String userEmail,
+}) {
+  final List<AppNotification> notifs = [];
+  final targetEmail = userEmail.trim().toLowerCase();
+
+  if (isOwner) {
+    // 1. Owner sees incoming rental requests and lifecycle events
+    for (final b in userBookingsList) {
+      final renterName = b.customerName.isNotEmpty ? b.customerName : "Customer";
+      if (b.status == "Pending") {
+        notifs.add(
+          AppNotification(
+            id: "notif_req_${b.id}",
+            title: "New Rental Request: ${b.car.name}",
+            message: "$renterName requested ${b.car.name} for ${b.days} days (PKR ${b.totalPrice}). Tap to review & accept.",
+            timestamp: b.bookingDate,
+            type: "request",
+            forRole: "owner",
+            targetBookingId: b.id,
+            targetCarName: b.car.name,
+          ),
+        );
+      } else if (b.status == "Confirmed") {
+        notifs.add(
+          AppNotification(
+            id: "notif_conf_${b.id}",
+            title: "Confirmed Booking: ${b.car.name}",
+            message: "Active rental scheduled with $renterName (${b.pickupDate} - ${b.returnDate}).",
+            timestamp: b.bookingDate,
+            type: "accepted",
+            forRole: "owner",
+            targetBookingId: b.id,
+            targetCarName: b.car.name,
+          ),
+        );
+      } else if (b.status == "Completed") {
+        notifs.add(
+          AppNotification(
+            id: "notif_comp_${b.id}",
+            title: "Trip Completed: ${b.car.name}",
+            message: "Rental trip finished. Total payout PKR ${b.totalPrice} finalized.",
+            timestamp: b.bookingDate,
+            type: "completed",
+            forRole: "owner",
+            targetBookingId: b.id,
+            targetCarName: b.car.name,
+          ),
+        );
+      }
+    }
+
+    // 2. Owner listed cars
+    for (final c in allCarsList.where((c) => c.isUserCar)) {
+      notifs.add(
+        AppNotification(
+          id: "notif_car_${c.id}",
+          title: "Fleet Active: ${c.name}",
+          message: "Your ${c.brand} is listed at PKR ${c.price} in ${c.location}.",
+          timestamp: DateTime.now().subtract(const Duration(hours: 4)),
+          type: "car_listed",
+          forRole: "owner",
+          targetCarName: c.name,
+        ),
+      );
+    }
+
+    // 3. Welcome host alert
+    notifs.add(
+      AppNotification(
+        id: "notif_welcome_owner",
+        title: "Welcome to Host Gateway",
+        message: "Your host dashboard is live. You can manage fleet, bookings, and daily revenue here.",
+        timestamp: DateTime.now().subtract(const Duration(days: 1)),
+        type: "welcome",
+        forRole: "owner",
+      ),
+    );
+  } else {
+    // Customer Mode: Show alerts for trips booked by this customer
+    for (final b in userBookingsList) {
+      final bEmail = (b.customerEmail.isNotEmpty ? b.customerEmail : email).trim().toLowerCase();
+      final isMyBooking = targetEmail.isEmpty || bEmail == targetEmail || targetEmail == email.trim().toLowerCase();
+
+      if (isMyBooking) {
+        if (b.status == "Pending") {
+          notifs.add(
+            AppNotification(
+              id: "notif_cust_req_${b.id}",
+              title: "Request Submitted: ${b.car.name}",
+              message: "Your ${b.days}-day rental request has been sent to the host. Awaiting approval.",
+              timestamp: b.bookingDate,
+              type: "request",
+              forRole: "customer",
+              targetBookingId: b.id,
+              targetCarName: b.car.name,
+            ),
+          );
+        } else if (b.status == "Confirmed") {
+          notifs.add(
+            AppNotification(
+              id: "notif_cust_conf_${b.id}",
+              title: "🎉 Booking Approved: ${b.car.name}",
+              message: "Host accepted your booking! Pickup is scheduled on ${b.pickupDate}.",
+              timestamp: b.bookingDate,
+              type: "accepted",
+              forRole: "customer",
+              targetBookingId: b.id,
+              targetCarName: b.car.name,
+            ),
+          );
+        } else if (b.status == "Declined") {
+          notifs.add(
+            AppNotification(
+              id: "notif_cust_decl_${b.id}",
+              title: "⚠️ Request Declined: ${b.car.name}",
+              message: "Host declined your request. ${b.car.name} is now unlocked if you want to request another car.",
+              timestamp: b.bookingDate,
+              type: "declined",
+              forRole: "customer",
+              targetBookingId: b.id,
+              targetCarName: b.car.name,
+            ),
+          );
+        } else if (b.status == "Completed") {
+          notifs.add(
+            AppNotification(
+              id: "notif_cust_comp_${b.id}",
+              title: "Trip Completed: ${b.car.name}",
+              message: "Thank you for renting with us! Hope you had a smooth drive in ${b.car.name}.",
+              timestamp: b.bookingDate,
+              type: "completed",
+              forRole: "customer",
+              targetBookingId: b.id,
+              targetCarName: b.car.name,
+            ),
+          );
+        }
+      }
+    }
+
+    // Welcome customer alert
+    notifs.add(
+      AppNotification(
+        id: "notif_welcome_customer",
+        title: "Welcome to Premium Rentals",
+        message: "Explore top cars across Islamabad & Rawalpindi. Self-drive and with-driver modes available.",
+        timestamp: DateTime.now().subtract(const Duration(days: 1)),
+        type: "welcome",
+        forRole: "customer",
+      ),
+    );
+  }
+
+  // Mark read status based on saved IDs
+  for (final n in notifs) {
+    n.isRead = readNotificationIds.contains(n.id);
+  }
+
+  // Sort by newest first
+  notifs.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+  return notifs;
+}
+
+int getUnreadNotificationCount({
+  required bool isOwner,
+  required String userEmail,
+}) {
+  return getLiveNotificationsForUser(isOwner: isOwner, userEmail: userEmail)
+      .where((n) => !n.isRead)
+      .length;
+}
+
+Future<void> markNotificationAsRead(String notifId) async {
+  readNotificationIds.add(notifId);
+  await saveReadNotificationsToLocalStorage();
+}
+
+Future<void> markAllNotificationsAsReadForUser({
+  required bool isOwner,
+  required String userEmail,
+}) async {
+  final notifs = getLiveNotificationsForUser(isOwner: isOwner, userEmail: userEmail);
+  for (final n in notifs) {
+    readNotificationIds.add(n.id);
+  }
+  await saveReadNotificationsToLocalStorage();
 }
