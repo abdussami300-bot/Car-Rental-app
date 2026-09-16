@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'car_photos_screen.dart';
 import 'theme.dart';
@@ -236,10 +235,17 @@ class _AddCarState extends State<AddCar> {
         _selectedCategory = "Hatchback";
       }
 
-      if (d.contains("with driver")) {
-        _selectedRentalMode = "With Driver";
-      } else if (d.contains("both available")) {
-        _selectedRentalMode = "Both Available";
+      if (_rentalModes.contains(car.rentalMode)) {
+        _selectedRentalMode = car.rentalMode;
+      } else {
+        final d = car.description.toLowerCase();
+        if (d.contains("both available") || d.contains("both")) {
+          _selectedRentalMode = "Both Available";
+        } else if (d.contains("with driver")) {
+          _selectedRentalMode = "With Driver";
+        } else if (d.contains("self-drive") || d.contains("self drive")) {
+          _selectedRentalMode = "Self-Drive";
+        }
       }
 
       // Parse existing city and area
@@ -414,6 +420,7 @@ class _AddCarState extends State<AddCar> {
         speed: widget.carToEdit!.speed,
         location: locationValue,
         description: finalDescription,
+        rentalMode: _selectedRentalMode,
         isUserCar: true,
         availableFrom: _availableFrom != null ? _formatDate(_availableFrom!) : widget.carToEdit!.availableFrom,
         availableTo: _availableTo != null ? _formatDate(_availableTo!) : widget.carToEdit!.availableTo,
@@ -451,6 +458,7 @@ class _AddCarState extends State<AddCar> {
       speed: "220 km/h",
       location: locationValue,
       description: finalDescription,
+      rentalMode: _selectedRentalMode,
       isUserCar: true,
       availableFrom: _availableFrom != null ? _formatDate(_availableFrom!) : "Available Now",
       availableTo: _availableTo != null ? _formatDate(_availableTo!) : "Always Open",

@@ -60,11 +60,11 @@ class _MyCarState extends State<MyCar> {
                 backgroundColor: Colors.redAccent,
                 foregroundColor: Colors.white,
               ),
-              onPressed: () {
+              onPressed: () async {
                 setState(() {
                   allCarsList.removeWhere((c) => c.id == car.id);
-                  saveCarsToLocalStorage();
                 });
+                await saveCarsToLocalStorage();
                 Navigator.pop(dialogContext);
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
@@ -304,6 +304,24 @@ class _MyCarState extends State<MyCar> {
                                                   style: TextStyle(
                                                     color: Colors.green,
                                                     fontSize: 11,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 6),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(
+                                                    horizontal: 7, vertical: 2),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.teal.withOpacity(0.2),
+                                                  borderRadius:
+                                                      BorderRadius.circular(6),
+                                                ),
+                                                child: Text(
+                                                  car.rentalMode == 'Both Available' ? 'Self & Driver' : car.rentalMode,
+                                                  style: const TextStyle(
+                                                    color: Colors.tealAccent,
+                                                    fontSize: 10,
                                                     fontWeight: FontWeight.bold,
                                                   ),
                                                 ),

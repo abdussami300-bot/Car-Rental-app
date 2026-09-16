@@ -5,19 +5,23 @@ import 'my_car.dart';
 import 'add_car.dart';
 import 'owner_bookings_screen.dart';
 import 'login.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'user_data.dart';
+import 'verification_screen.dart';
+import 'favorites_screen.dart';
+import 'booking_details_screen.dart';
+import 'host_earnings_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await loadCarsFromLocalStorage();
-  await loadBookingsFromLocalStorage();
-  await loadReadNotificationsFromLocalStorage();
+  await loadAllAppCustomData();
   runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
   final String name;
   final String email;
+  final bool isGuest;
   const MyApp({
     super.key,
     this.email = "",
@@ -40,11 +44,13 @@ class MyApp extends StatelessWidget {
 class HomePage extends StatefulWidget {
   final String name;
   final String email;
+  final bool isGuest;
 
   const HomePage({
     super.key,
     required this.name,
     required this.email,
+    this.isGuest = false,
   });
 
   @override
@@ -59,6 +65,69 @@ class _HomePageState extends State<HomePage> {
   DateTime? _pickupDate;
   DateTime? _returnDate;
 
+  String get _currentUserEmail => widget.isGuest
+      ? "guest@explore.com"
+      : (activeUserEmail.isNotEmpty ? activeUserEmail : (widget.email.isNotEmpty ? widget.email : email)).trim().toLowerCase();
+  String get _currentUserName => widget.isGuest
+      ? "Guest User"
+      : (activeUserName.isNotEmpty ? activeUserName : (widget.name.isNotEmpty ? widget.name : name));
+
+  bool _requireLogin({String action = "perform this action"}) {
+    if (widget.isGuest) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1E1E1E),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.lock_outline, color: AppTheme.primary, size: 24),
+              SizedBox(width: 8),
+              Text("Login Required", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Text(
+            "You are exploring as a guest. Please login or create an account to $action.",
+            style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () {
+                Navigator.pop(ctx);
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => LoginPage()),
+                );
+              },
+              child: const Text("Login / Sign Up"),
+            ),
+          ],
+        ),
+      );
+      return false;
+    }
+    return true;
+  }
+
+  // ================= CUSTOMER ADVANCED FILTER STATE =================
+  static const double _kMinPrice = 2000;
+  static const double _kMaxPrice = 50000;
+  RangeValues _priceRange = const RangeValues(_kMinPrice, _kMaxPrice);
+  String _selectedTransmission = "All";
+  String _selectedFuelType = "All";
+  String _selectedSeats = "All";
+  String _selectedRentalMode = "All";
+  String _sortBy = "Default";
+
   @override
   void initState() {
     super.initState();
@@ -66,11 +135,25 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _loadStoredData() async {
-    await loadCarsFromLocalStorage();
-    await loadBookingsFromLocalStorage();
-    await loadReadNotificationsFromLocalStorage();
+    await loadAllAppCustomData();
+    if (widget.isGuest) {
+      if (mounted) setState(() {});
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
     if (mounted) {
-      setState(() {});
+      final savedEmail = prefs.getString("app_user_active_email");
+      final savedName = prefs.getString("app_user_active_name");
+      if (savedEmail != null && savedEmail.isNotEmpty) {
+        activeUserEmail = savedEmail;
+      }
+      if (savedName != null && savedName.isNotEmpty) {
+        activeUserName = savedName;
+      }
+
+      setState(() {
+        _isOwnerMode = prefs.getBool("app_user_is_owner_mode") ?? _isOwnerMode;
+      });
     }
   }
 
@@ -178,8 +261,7 @@ class _HomePageState extends State<HomePage> {
   // Multiple users CAN request the same car.
   // But this car is hidden ONLY from the specific user who has an active (Pending/Confirmed) request for it!
   List<CarItem> get _availableCars {
-    final currentUser = (widget.email.isNotEmpty ? widget.email : email).trim().toLowerCase();
-    return allCarsList.where((car) => !hasUserRequestedCar(car, currentUser)).toList();
+    return allCarsList.where((car) => !hasUserRequestedCar(car, _currentUserEmail)).toList();
   }
 
   List<String> get _brands {
@@ -192,22 +274,126 @@ class _HomePageState extends State<HomePage> {
     return brandSet.toList();
   }
 
-  List<CarItem> get _allCars => _availableCars;
-
-  List<CarItem> get _filteredCars {
-    return _availableCars.where((car) {
-      final brandMatch = _selectedBrand == "All" ||
-          car.brand.toLowerCase() == _selectedBrand.toLowerCase();
-
-      final cityMatch = _selectedCity == "All Cities" ||
-          car.location.toLowerCase().contains(_selectedCity.toLowerCase());
-
-      final areaMatch = _selectedArea == "All Areas" ||
-          car.location.toLowerCase().contains(_selectedArea.toLowerCase());
-
-      return brandMatch && cityMatch && areaMatch;
-    }).toList();
+  int get _activeFilterCount {
+    int count = 0;
+    if (_selectedBrand != "All") count++;
+    if (_selectedCity != "All Cities") count++;
+    if (_selectedArea != "All Areas") count++;
+    if (_selectedTransmission != "All") count++;
+    if (_selectedFuelType != "All") count++;
+    if (_selectedSeats != "All") count++;
+    if (_selectedRentalMode != "All") count++;
+    if (_priceRange.start > _kMinPrice || _priceRange.end < _kMaxPrice) count++;
+    if (_sortBy != "Default") count++;
+    return count;
   }
+
+  void _resetAllFilters() {
+    setState(() {
+      _selectedBrand = "All";
+      _selectedCity = "All Cities";
+      _selectedArea = "All Areas";
+      _selectedTransmission = "All";
+      _selectedFuelType = "All";
+      _selectedSeats = "All";
+      _selectedRentalMode = "All";
+      _priceRange = const RangeValues(_kMinPrice, _kMaxPrice);
+      _sortBy = "Default";
+      _searchQuery = "";
+    });
+  }
+
+  List<CarItem> _filterCarList(List<CarItem> list, {String? query}) {
+    var result = list.where((car) {
+      // 1. Search Query
+      if (query != null && query.trim().isNotEmpty) {
+        final q = query.toLowerCase().trim();
+        final matchesName = car.name.toLowerCase().contains(q);
+        final matchesBrand = car.brand.toLowerCase().contains(q);
+        final matchesLoc = car.location.toLowerCase().contains(q);
+        if (!matchesName && !matchesBrand && !matchesLoc) return false;
+      }
+
+      // 2. Brand
+      if (_selectedBrand != "All" &&
+          car.brand.toLowerCase() != _selectedBrand.toLowerCase()) {
+        return false;
+      }
+
+      // 3. City
+      if (_selectedCity != "All Cities" &&
+          !car.location.toLowerCase().contains(_selectedCity.toLowerCase())) {
+        return false;
+      }
+
+      // 4. Area
+      if (_selectedArea != "All Areas" &&
+          !car.location.toLowerCase().contains(_selectedArea.toLowerCase())) {
+        return false;
+      }
+
+      // 5. Transmission
+      if (_selectedTransmission != "All" &&
+          !car.transmission.toLowerCase().contains(_selectedTransmission.toLowerCase())) {
+        return false;
+      }
+
+      // 6. Fuel Type
+      if (_selectedFuelType != "All" &&
+          !car.fuelType.toLowerCase().contains(_selectedFuelType.toLowerCase())) {
+        return false;
+      }
+
+      // 7. Seats
+      if (_selectedSeats != "All") {
+        if (!car.seats.toLowerCase().contains(_selectedSeats.toLowerCase())) {
+          return false;
+        }
+      }
+
+      // 8. Rental Mode (Self-Drive vs With Driver vs Both)
+      if (_selectedRentalMode != "All") {
+        if (!car.supportsRentalMode(_selectedRentalMode)) {
+          return false;
+        }
+      }
+
+      // 9. Price Range
+      final rawPrice = int.tryParse(car.price.replaceAll(RegExp(r'[^0-9]'), '')) ?? 5000;
+      if (rawPrice < _priceRange.start.toInt()) return false;
+      if (_priceRange.end < _kMaxPrice && rawPrice > _priceRange.end.toInt()) {
+        return false;
+      }
+
+      return true;
+    }).toList();
+
+    // Sorting
+    if (_sortBy == "Price: Low to High") {
+      result.sort((a, b) {
+        final pa = int.tryParse(a.price.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        final pb = int.tryParse(b.price.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        return pa.compareTo(pb);
+      });
+    } else if (_sortBy == "Price: High to Low") {
+      result.sort((a, b) {
+        final pa = int.tryParse(a.price.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        final pb = int.tryParse(b.price.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+        return pb.compareTo(pa);
+      });
+    } else if (_sortBy == "Highest Rated") {
+      result.sort((a, b) => b.rating.compareTo(a.rating));
+    }
+
+    // Filter out cars that are already booked for the selected date range
+    if (_pickupDate != null && _returnDate != null) {
+      result = result.where((car) => isCarAvailableForRange(car, _pickupDate!, _returnDate!)).toList();
+    }
+
+    return result;
+  }
+
+  List<CarItem> get _filteredCars => _filterCarList(_availableCars);
 
   void _navigateToCarDetails(CarItem car) {
     Navigator.push(
@@ -224,11 +410,13 @@ class _HomePageState extends State<HomePage> {
           speed: car.speed,
           location: car.location,
           description: car.description,
+          rentalMode: car.rentalMode,
           availableFrom: car.availableFrom,
           availableTo: car.availableTo,
           photos: car.photos,
-          currentUserEmail: widget.email.isNotEmpty ? widget.email : email,
-          currentUserName: widget.name.isNotEmpty ? widget.name : name,
+          currentUserEmail: _currentUserEmail,
+          currentUserName: _currentUserName,
+          isGuest: widget.isGuest,
         ),
       ),
     ).then((_) {
@@ -270,7 +458,7 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
               accountName: Text(
-                widget.name.isNotEmpty ? widget.name : "User Name",
+                _currentUserName,
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 18,
@@ -278,8 +466,113 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
               accountEmail: Text(
-                widget.email.isNotEmpty ? widget.email : "No email provided",
+                _currentUserEmail,
                 style: const TextStyle(color: Colors.grey, fontSize: 14),
+              ),
+            ),
+
+            // ================= MULTI-USER DEMO PROFILE SWITCHER =================
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF181818),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.amber.withOpacity(0.35), width: 1.2),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Icon(Icons.people_alt_outlined, color: Colors.amber, size: 14),
+                      ),
+                      const SizedBox(width: 8),
+                      const Text(
+                        "SWITCH TEST PROFILE",
+                        style: TextStyle(
+                          color: Colors.amber,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: demoUserProfiles.map((user) {
+                      final isSelected = _currentUserEmail == user.email.toLowerCase();
+                      return InkWell(
+                        onTap: () async {
+                          activeUserEmail = user.email;
+                          activeUserName = user.name;
+                          await loadBookingsFromLocalStorage();
+                          setState(() {
+                            if (user.role == "Host") {
+                              _isOwnerMode = true;
+                            } else {
+                              _isOwnerMode = false;
+                            }
+                            _currentIndex = 0;
+                          });
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.setString("app_user_active_email", user.email);
+                          await prefs.setString("app_user_active_name", user.name);
+                          await prefs.setBool("app_user_is_owner_mode", _isOwnerMode);
+                          if (context.mounted) {
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text("Switched active profile to ${user.name} (${user.role})"),
+                                backgroundColor: user.color,
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: isSelected ? user.color.withOpacity(0.25) : const Color(0xFF222222),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: isSelected ? user.color : Colors.white12,
+                              width: isSelected ? 1.5 : 1.0,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              CircleAvatar(
+                                radius: 5,
+                                backgroundColor: user.color,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                user.name,
+                                style: TextStyle(
+                                  color: isSelected ? Colors.white : Colors.white70,
+                                  fontSize: 11,
+                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
               ),
             ),
 
@@ -338,24 +631,29 @@ class _HomePageState extends State<HomePage> {
                   Switch(
                     value: _isOwnerMode,
                     activeColor: AppTheme.primary,
-                    onChanged: (val) {
+                    onChanged: (val) async {
+                      await loadBookingsFromLocalStorage();
                       setState(() {
                         _isOwnerMode = val;
                         _currentIndex = 0;
                       });
-                      Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            _isOwnerMode
-                                ? "🚗 Switched to Owner Mode (Car Host)!"
-                                : "👤 Switched to Customer Mode (Renter)!",
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool("app_user_is_owner_mode", val);
+                      if (context.mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              _isOwnerMode
+                                  ? "🚗 Switched to Owner Mode (Car Host)!"
+                                  : "👤 Switched to Customer Mode (Renter)!",
+                            ),
+                            backgroundColor:
+                                _isOwnerMode ? AppTheme.primary : Colors.blueGrey,
+                            duration: const Duration(seconds: 2),
                           ),
-                          backgroundColor:
-                              _isOwnerMode ? AppTheme.primary : Colors.blueGrey,
-                          duration: const Duration(seconds: 2),
-                        ),
-                      );
+                        );
+                      }
                     },
                   ),
                 ],
@@ -452,11 +750,16 @@ class _HomePageState extends State<HomePage> {
 
             const Divider(color: Colors.white24),
             ListTile(
-              leading: const Icon(Icons.logout, color: Colors.redAccent),
-              title: const Text(
-                "Logout",
+              leading: Icon(
+                widget.isGuest ? Icons.login : Icons.logout,
+                color: widget.isGuest ? AppTheme.primaryLight : Colors.redAccent,
+              ),
+              title: Text(
+                widget.isGuest ? "Login / Sign Up" : "Logout",
                 style: TextStyle(
-                    color: Colors.redAccent, fontWeight: FontWeight.bold),
+                  color: widget.isGuest ? AppTheme.primaryLight : Colors.redAccent,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               onTap: () {
                 Navigator.pop(context);
@@ -479,6 +782,42 @@ class _HomePageState extends State<HomePage> {
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: [
+          if (!_isOwnerMode)
+            IconButton(
+              icon: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  const Icon(Icons.favorite_border, color: Colors.white),
+                  if (favoriteCarIds.isNotEmpty)
+                    Positioned(
+                      right: -2,
+                      top: -2,
+                      child: Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: const BoxDecoration(
+                          color: Colors.redAccent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Text(
+                          "${favoriteCarIds.length}",
+                          style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => FavoritesScreen(
+                      userEmail: widget.email.isNotEmpty ? widget.email : email,
+                      userName: widget.name.isNotEmpty ? widget.name : name,
+                    ),
+                  ),
+                ).then((_) => setState(() {}));
+              },
+            ),
           IconButton(
             onPressed: () => _showNotificationsSheet(context),
             icon: Stack(
@@ -514,7 +853,10 @@ class _HomePageState extends State<HomePage> {
         selectedItemColor: AppTheme.primary,
         unselectedItemColor: Colors.grey,
         currentIndex: _currentIndex,
-        onTap: (int index) {
+        onTap: (int index) async {
+          if ((!_isOwnerMode && index == 2) || (_isOwnerMode && index == 1)) {
+            await loadBookingsFromLocalStorage();
+          }
           setState(() {
             _currentIndex = index;
           });
@@ -771,6 +1113,11 @@ class _HomePageState extends State<HomePage> {
         iconColor = Colors.redAccent;
         iconData = Icons.cancel_outlined;
         break;
+      case "in_progress":
+        iconBg = Colors.cyan.withOpacity(0.15);
+        iconColor = Colors.cyanAccent;
+        iconData = Icons.vpn_key_outlined;
+        break;
       case "completed":
         iconBg = Colors.cyan.withOpacity(0.15);
         iconColor = Colors.cyanAccent;
@@ -798,7 +1145,7 @@ class _HomePageState extends State<HomePage> {
         Navigator.pop(sheetContext);
 
         if (_isOwnerMode) {
-          if (notif.type == "request" || notif.type == "accepted" || notif.type == "completed") {
+          if (notif.type == "request" || notif.type == "accepted" || notif.type == "in_progress" || notif.type == "completed") {
             Navigator.push(
               context,
               MaterialPageRoute(builder: (context) => const OwnerBookingsScreen()),
@@ -810,7 +1157,7 @@ class _HomePageState extends State<HomePage> {
           }
         } else {
           // Customer mode
-          if (notif.type == "request" || notif.type == "accepted" || notif.type == "declined" || notif.type == "completed") {
+          if (notif.type == "request" || notif.type == "accepted" || notif.type == "in_progress" || notif.type == "declined" || notif.type == "completed") {
             setState(() {
               _currentIndex = 2; // Booking tab
             });
@@ -908,7 +1255,7 @@ class _HomePageState extends State<HomePage> {
                             ],
                           ),
                         )
-                      else if ((notif.type == "accepted" || notif.type == "request") && !_isOwnerMode)
+                      else if ((notif.type == "accepted" || notif.type == "in_progress" || notif.type == "request") && !_isOwnerMode)
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
@@ -955,6 +1302,505 @@ class _HomePageState extends State<HomePage> {
       const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
       return "${time.day} ${months[time.month - 1]}";
     }
+  }
+
+  // ================= ACTIVE FILTER CHIPS ROW =================
+  Widget _buildActiveFilterChips() {
+    if (_activeFilterCount == 0) return const SizedBox.shrink();
+
+    final chips = <Widget>[];
+
+    // Reset all button
+    chips.add(
+      InkWell(
+        onTap: _resetAllFilters,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: Colors.redAccent.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.refresh, size: 13, color: Colors.redAccent),
+              const SizedBox(width: 4),
+              Text(
+                "Reset All ($_activeFilterCount)",
+                style: const TextStyle(
+                  color: Colors.redAccent,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    void addChip(String label, VoidCallback onRemove) {
+      chips.add(
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: AppTheme.primary.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppTheme.primary.withOpacity(0.5)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  color: AppTheme.primaryLight,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 4),
+              InkWell(
+                onTap: onRemove,
+                child: const Icon(Icons.close, size: 14, color: AppTheme.primaryLight),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_selectedCity != "All Cities") {
+      addChip("City: $_selectedCity", () {
+        setState(() {
+          _selectedCity = "All Cities";
+          _selectedArea = "All Areas";
+        });
+      });
+    }
+
+    if (_selectedArea != "All Areas") {
+      addChip("Area: $_selectedArea", () {
+        setState(() {
+          _selectedArea = "All Areas";
+        });
+      });
+    }
+
+    if (_selectedBrand != "All") {
+      addChip("Brand: $_selectedBrand", () {
+        setState(() {
+          _selectedBrand = "All";
+        });
+      });
+    }
+
+    if (_priceRange.start > _kMinPrice || _priceRange.end < _kMaxPrice) {
+      final chipLabel = _priceRange.end >= _kMaxPrice
+          ? "Rs. ${_priceRange.start.toInt()}+"
+          : "Rs. ${_priceRange.start.toInt()} - ${_priceRange.end.toInt()}";
+      addChip(chipLabel, () {
+        setState(() {
+          _priceRange = const RangeValues(_kMinPrice, _kMaxPrice);
+        });
+      });
+    }
+
+    if (_selectedTransmission != "All") {
+      addChip(_selectedTransmission, () {
+        setState(() {
+          _selectedTransmission = "All";
+        });
+      });
+    }
+
+    if (_selectedSeats != "All") {
+      addChip(_selectedSeats, () {
+        setState(() {
+          _selectedSeats = "All";
+        });
+      });
+    }
+
+    if (_selectedFuelType != "All") {
+      addChip(_selectedFuelType, () {
+        setState(() {
+          _selectedFuelType = "All";
+        });
+      });
+    }
+
+    if (_selectedRentalMode != "All") {
+      addChip("Mode: $_selectedRentalMode", () {
+        setState(() {
+          _selectedRentalMode = "All";
+        });
+      });
+    }
+
+    if (_sortBy != "Default") {
+      addChip("Sort: $_sortBy", () {
+        setState(() {
+          _sortBy = "Default";
+        });
+      });
+    }
+
+    return Container(
+      height: 32,
+      margin: const EdgeInsets.only(bottom: 12),
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: chips.length,
+        separatorBuilder: (context, index) => const SizedBox(width: 8),
+        itemBuilder: (context, index) => chips[index],
+      ),
+    );
+  }
+
+  // ================= ADVANCED FILTER BOTTOM SHEET =================
+  void _showFilterBottomSheet(BuildContext context) {
+    String tempBrand = _selectedBrand;
+    String tempTransmission = _selectedTransmission;
+    String tempFuelType = _selectedFuelType;
+    String tempSeats = _selectedSeats;
+    String tempRentalMode = _selectedRentalMode;
+    RangeValues tempPriceRange = _priceRange;
+    String tempSortBy = _sortBy;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final matchingCars = _availableCars.where((car) {
+              if (tempBrand != "All" && car.brand.toLowerCase() != tempBrand.toLowerCase()) return false;
+              if (_selectedCity != "All Cities" && !car.location.toLowerCase().contains(_selectedCity.toLowerCase())) return false;
+              if (_selectedArea != "All Areas" && !car.location.toLowerCase().contains(_selectedArea.toLowerCase())) return false;
+              if (tempTransmission != "All" && !car.transmission.toLowerCase().contains(tempTransmission.toLowerCase())) return false;
+              if (tempFuelType != "All" && !car.fuelType.toLowerCase().contains(tempFuelType.toLowerCase())) return false;
+              if (tempSeats != "All" && !car.seats.toLowerCase().contains(tempSeats.toLowerCase())) return false;
+              if (tempRentalMode != "All" && !car.supportsRentalMode(tempRentalMode)) {
+                return false;
+              }
+              final p = int.tryParse(car.price.replaceAll(RegExp(r'[^0-9]'), '')) ?? 5000;
+              if (p < tempPriceRange.start.toInt()) return false;
+              if (tempPriceRange.end < _kMaxPrice && p > tempPriceRange.end.toInt()) return false;
+              return true;
+            }).length;
+
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.82,
+              decoration: const BoxDecoration(
+                color: Color(0xFF181818),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                border: Border(top: BorderSide(color: Colors.white12)),
+              ),
+              child: Column(
+                children: [
+                  const SizedBox(height: 12),
+                  Container(
+                    width: 45,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white24,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Header
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: AppTheme.primary.withOpacity(0.15),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.tune, color: AppTheme.primary, size: 20),
+                            ),
+                            const SizedBox(width: 10),
+                            const Text(
+                              "Filters & Sort",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        TextButton(
+                          onPressed: () {
+                            setSheetState(() {
+                              tempBrand = "All";
+                              tempTransmission = "All";
+                              tempFuelType = "All";
+                              tempSeats = "All";
+                              tempRentalMode = "All";
+                              tempPriceRange = const RangeValues(_kMinPrice, _kMaxPrice);
+                              tempSortBy = "Default";
+                            });
+                          },
+                          child: const Text(
+                            "Reset All",
+                            style: TextStyle(
+                              color: Colors.redAccent,
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const Divider(color: Colors.white12, height: 20),
+
+                  // Filter options body
+                  Expanded(
+                    child: ListView(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      children: [
+                        // 1. SORT BY
+                        _buildFilterSectionTitle("Sort Results By"),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            "Default",
+                            "Price: Low to High",
+                            "Price: High to Low",
+                            "Highest Rated",
+                          ].map((sortOption) {
+                            final isSel = tempSortBy == sortOption;
+                            return ChoiceChip(
+                              label: Text(sortOption),
+                              selected: isSel,
+                              selectedColor: AppTheme.primary,
+                              backgroundColor: const Color(0xFF222222),
+                              labelStyle: TextStyle(
+                                color: isSel ? Colors.white : Colors.grey[300],
+                                fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                                fontSize: 12,
+                              ),
+                              onSelected: (_) => setSheetState(() => tempSortBy = sortOption),
+                            );
+                          }).toList(),
+                        ),
+                        const SizedBox(height: 20),
+
+                        // 2. DAILY PRICE BUDGET
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            _buildFilterSectionTitle("Daily Price Budget"),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: AppTheme.primary.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                tempPriceRange.end >= _kMaxPrice
+                                    ? "PKR ${tempPriceRange.start.toInt()} - 50,000+/day"
+                                    : "PKR ${tempPriceRange.start.toInt()} - ${tempPriceRange.end.toInt()}/day",
+                                style: const TextStyle(
+                                  color: AppTheme.primaryLight,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        RangeSlider(
+                          values: RangeValues(
+                            tempPriceRange.start.clamp(_kMinPrice, _kMaxPrice),
+                            tempPriceRange.end.clamp(_kMinPrice, _kMaxPrice),
+                          ),
+                          min: _kMinPrice,
+                          max: _kMaxPrice,
+                          divisions: 48,
+                          activeColor: AppTheme.primary,
+                          inactiveColor: Colors.white12,
+                          labels: RangeLabels(
+                            "Rs. ${tempPriceRange.start.toInt()}",
+                            tempPriceRange.end >= _kMaxPrice
+                                ? "Rs. 50,000+"
+                                : "Rs. ${tempPriceRange.end.toInt()}",
+                          ),
+                          onChanged: (vals) {
+                            setSheetState(() {
+                              tempPriceRange = vals;
+                            });
+                          },
+                        ),
+                        const SizedBox(height: 16),
+
+                        // 3. TRANSMISSION
+                        _buildFilterSectionTitle("Transmission"),
+                        Wrap(
+                          spacing: 8,
+                          children: ["All", "Automatic", "Manual"].map((t) {
+                            final isSel = tempTransmission == t;
+                            return ChoiceChip(
+                              label: Text(t),
+                              selected: isSel,
+                              selectedColor: AppTheme.primary,
+                              backgroundColor: const Color(0xFF222222),
+                              labelStyle: TextStyle(
+                                color: isSel ? Colors.white : Colors.grey[300],
+                                fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                                fontSize: 12,
+                              ),
+                              onSelected: (_) => setSheetState(() => tempTransmission = t),
+                            );
+                          }).toList(),
+                        ),
+                        const SizedBox(height: 20),
+
+                        // 4. SEATING CAPACITY
+                        _buildFilterSectionTitle("Seats Capacity"),
+                        Wrap(
+                          spacing: 8,
+                          children: ["All", "4 Seats", "5 Seats", "7 Seats"].map((s) {
+                            final isSel = tempSeats == s;
+                            return ChoiceChip(
+                              label: Text(s),
+                              selected: isSel,
+                              selectedColor: AppTheme.primary,
+                              backgroundColor: const Color(0xFF222222),
+                              labelStyle: TextStyle(
+                                color: isSel ? Colors.white : Colors.grey[300],
+                                fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                                fontSize: 12,
+                              ),
+                              onSelected: (_) => setSheetState(() => tempSeats = s),
+                            );
+                          }).toList(),
+                        ),
+                        const SizedBox(height: 20),
+
+                        // 5. FUEL TYPE
+                        _buildFilterSectionTitle("Fuel Type"),
+                        Wrap(
+                          spacing: 8,
+                          children: ["All", "Petrol", "Diesel", "Hybrid", "Electric"].map((f) {
+                            final isSel = tempFuelType == f;
+                            return ChoiceChip(
+                              label: Text(f),
+                              selected: isSel,
+                              selectedColor: AppTheme.primary,
+                              backgroundColor: const Color(0xFF222222),
+                              labelStyle: TextStyle(
+                                color: isSel ? Colors.white : Colors.grey[300],
+                                fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                                fontSize: 12,
+                              ),
+                              onSelected: (_) => setSheetState(() => tempFuelType = f),
+                            );
+                          }).toList(),
+                        ),
+                        const SizedBox(height: 20),
+
+                        // 6. RENTAL MODE (PAKISTAN SPECIFIC)
+                        _buildFilterSectionTitle("Rental Mode"),
+                        Wrap(
+                          spacing: 8,
+                          children: ["All", "Self-Drive", "With Driver"].map((m) {
+                            final isSel = tempRentalMode == m;
+                            return ChoiceChip(
+                              label: Text(m),
+                              selected: isSel,
+                              selectedColor: AppTheme.primary,
+                              backgroundColor: const Color(0xFF222222),
+                              labelStyle: TextStyle(
+                                color: isSel ? Colors.white : Colors.grey[300],
+                                fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                                fontSize: 12,
+                              ),
+                              onSelected: (_) => setSheetState(() => tempRentalMode = m),
+                            );
+                          }).toList(),
+                        ),
+                        const SizedBox(height: 24),
+                      ],
+                    ),
+                  ),
+
+                  // Bottom Pinned Apply Button
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF1E1E1E),
+                      border: Border(top: BorderSide(color: Colors.white12)),
+                    ),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          setState(() {
+                            _selectedBrand = tempBrand;
+                            _selectedTransmission = tempTransmission;
+                            _selectedFuelType = tempFuelType;
+                            _selectedSeats = tempSeats;
+                            _selectedRentalMode = tempRentalMode;
+                            _priceRange = tempPriceRange;
+                            _sortBy = tempSortBy;
+                          });
+                          Navigator.pop(sheetContext);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.primary,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
+                        child: Text(
+                          matchingCars > 0
+                              ? "SHOW $matchingCars AVAILABLE CARS"
+                              : "NO CARS MATCH (TRY ADJUSTING)",
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildFilterSectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        title,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
   }
 
   Widget _buildCurrentTab() {
@@ -1013,12 +1859,12 @@ class _HomePageState extends State<HomePage> {
           }).toList();
 
     final confirmedOrCompleted = hostBookings
-        .where((b) => b.status == "Confirmed" || b.status == "Completed")
+        .where((b) => b.status == "Confirmed" || b.status == "In Progress" || b.status == "Completed")
         .toList();
     final int totalEarnings = confirmedOrCompleted.fold<int>(
         0, (sum, b) => sum + b.totalPrice);
     final int activeBookingsCount = hostBookings
-        .where((b) => b.status == "Pending" || b.status == "Confirmed")
+        .where((b) => b.status == "Pending" || b.status == "Confirmed" || b.status == "In Progress")
         .length;
     final pendingBookings =
         hostBookings.where((b) => b.status == "Pending").toList();
@@ -1362,10 +2208,12 @@ class _HomePageState extends State<HomePage> {
                             ? Colors.amber.withOpacity(0.5)
                             : booking.status == "Confirmed"
                                 ? Colors.green.withOpacity(0.4)
-                                : booking.status == "Completed"
-                                    ? AppTheme.primary.withOpacity(0.4)
-                                    : Colors.white12,
-                        width: booking.status == "Pending" ? 1.5 : 1.0,
+                                : booking.status == "In Progress"
+                                    ? Colors.cyan.withOpacity(0.5)
+                                    : booking.status == "Completed"
+                                        ? AppTheme.primary.withOpacity(0.4)
+                                        : Colors.white12,
+                        width: (booking.status == "Pending" || booking.status == "In Progress") ? 1.5 : 1.0,
                       ),
                     ),
                     child: Column(
@@ -1410,50 +2258,36 @@ class _HomePageState extends State<HomePage> {
                                         : "${booking.days} Days Rental",
                                     style: const TextStyle(
                                         color: AppTheme.primaryLight,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600),
+                                        fontSize: 12),
                                   ),
-                                  const SizedBox(height: 4),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Text(
-                                        "Payout: Rs. ${booking.totalPrice}",
-                                        style: const TextStyle(
-                                            color: Colors.white70,
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.bold),
-                                      ),
-                                      Text(
-                                        "${booking.days} Days Trip",
-                                        style: const TextStyle(
-                                            color: Colors.grey, fontSize: 11),
-                                      ),
-                                    ],
-                                  ),
-                                  if (booking.customerName.isNotEmpty || booking.customerEmail.isNotEmpty) ...[
-                                    const SizedBox(height: 3),
-                                    Row(
-                                      children: [
-                                        const Icon(Icons.person_outline, size: 12, color: AppTheme.primaryLight),
-                                        const SizedBox(width: 4),
-                                        Expanded(
-                                          child: Text(
-                                            "Renter: ${booking.customerName.isNotEmpty ? booking.customerName : 'Customer'} (${booking.customerEmail.isNotEmpty ? booking.customerEmail : 'Contact'})",
-                                            style: const TextStyle(color: Colors.white70, fontSize: 10),
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
                                 ],
                               ),
                             ),
                           ],
                         ),
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              booking.customerName.isNotEmpty
+                                  ? "👤 ${booking.customerName}"
+                                  : "👤 Verified Renter",
+                              style: const TextStyle(
+                                  color: Colors.white70, fontSize: 12),
+                            ),
+                            Text(
+                              "PKR ${booking.totalPrice}",
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
 
-                        // Action buttons for Host
+                        // Action buttons based on status
                         if (booking.status == "Pending") ...[
                           const SizedBox(height: 10),
                           const Divider(color: Colors.white10),
@@ -1468,9 +2302,8 @@ class _HomePageState extends State<HomePage> {
                                       saveBookingsToLocalStorage();
                                     });
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                            "Declined rental request for ${booking.car.name}"),
+                                      const SnackBar(
+                                        content: Text("Booking request declined"),
                                         backgroundColor: Colors.redAccent,
                                       ),
                                     );
@@ -1480,18 +2313,21 @@ class _HomePageState extends State<HomePage> {
                                   label: const Text("Decline",
                                       style: TextStyle(
                                           color: Colors.redAccent,
-                                          fontSize: 13)),
+                                          fontSize: 12)),
                                   style: OutlinedButton.styleFrom(
-                                    side: const BorderSide(color: Colors.redAccent),
+                                    side: const BorderSide(
+                                        color: Colors.redAccent),
                                     shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10)),
-                                    padding:
-                                        const EdgeInsets.symmetric(vertical: 8),
+                                        borderRadius:
+                                            BorderRadius.circular(10)),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 8),
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 10),
+                              const SizedBox(width: 8),
                               Expanded(
+                                flex: 2,
                                 child: ElevatedButton.icon(
                                   onPressed: () {
                                     setState(() {
@@ -1501,14 +2337,14 @@ class _HomePageState extends State<HomePage> {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
                                         content: Text(
-                                            "Accepted! Booking for ${booking.car.name} is Confirmed."),
+                                            "Booking accepted for ${booking.car.name}! Ready for key handover."),
                                         backgroundColor: Colors.green,
                                       ),
                                     );
                                   },
                                   icon: const Icon(Icons.check,
                                       size: 16, color: Colors.white),
-                                  label: const Text("Accept Request",
+                                  label: const Text("Accept Booking",
                                       style: TextStyle(
                                           color: Colors.white,
                                           fontWeight: FontWeight.bold,
@@ -1516,15 +2352,52 @@ class _HomePageState extends State<HomePage> {
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: Colors.green,
                                     shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10)),
-                                    padding:
-                                        const EdgeInsets.symmetric(vertical: 8),
+                                        borderRadius:
+                                            BorderRadius.circular(10)),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 8),
                                   ),
                                 ),
                               ),
                             ],
                           ),
                         ] else if (booking.status == "Confirmed") ...[
+                          const SizedBox(height: 10),
+                          const Divider(color: Colors.white10),
+                          const SizedBox(height: 4),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: () {
+                                setState(() {
+                                  booking.status = "In Progress";
+                                  saveBookingsToLocalStorage();
+                                });
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                        "Keys handed over for ${booking.car.name}! Trip is now In Progress."),
+                                    backgroundColor: Colors.cyan.shade800,
+                                  ),
+                                );
+                              },
+                              icon: const Icon(Icons.key,
+                                  size: 16, color: Colors.white),
+                              label: const Text("Handover Keys & Start Trip",
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.cyan.shade800,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 8),
+                              ),
+                            ),
+                          ),
+                        ] else if (booking.status == "In Progress") ...[
                           const SizedBox(height: 10),
                           const Divider(color: Colors.white10),
                           const SizedBox(height: 4),
@@ -1955,6 +2828,11 @@ class _HomePageState extends State<HomePage> {
         icon = Icons.check_circle_outline;
         text = "Confirmed";
         break;
+      case "in progress":
+        color = Colors.cyan;
+        icon = Icons.vpn_key_outlined;
+        text = "In Progress";
+        break;
       case "completed":
         color = AppTheme.primaryLight;
         icon = Icons.verified_outlined;
@@ -2367,7 +3245,7 @@ class _HomePageState extends State<HomePage> {
                               const SnackBar(
                                 content: Text("Showing all available cars in Explore catalog"),
                                 backgroundColor: AppTheme.primary,
-                                duration: const Duration(seconds: 2),
+                                duration: Duration(seconds: 2),
                               ),
                             );
                           }
@@ -2397,18 +3275,58 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
 
-            const SizedBox(height: 25),
+            const SizedBox(height: 20),
 
-            // ================= BRAND FILTER CHIPS =================
-            const Text(
-              "Top Brands",
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
+            // ================= BRAND FILTER CHIPS WITH ADVANCED FILTER BUTTON =================
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  "Top Brands",
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                InkWell(
+                  onTap: () => _showFilterBottomSheet(context),
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: _activeFilterCount > 0 ? AppTheme.primary : const Color(0xFF1E1E1E),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: _activeFilterCount > 0 ? AppTheme.primary : Colors.white24,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.tune,
+                          size: 15,
+                          color: _activeFilterCount > 0 ? Colors.white : AppTheme.primaryLight,
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          _activeFilterCount > 0 ? "Filters ($_activeFilterCount)" : "Filters",
+                          style: TextStyle(
+                            color: _activeFilterCount > 0 ? Colors.white : Colors.white70,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
+            _buildActiveFilterChips(),
+            const SizedBox(height: 10),
             SizedBox(
               height: 42,
               child: ListView.builder(
@@ -2503,11 +3421,63 @@ class _HomePageState extends State<HomePage> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  _buildCarImage(
-                                    car.image,
-                                    width: double.infinity,
-                                    height: 150,
-                                    borderRadius: 15,
+                                  Stack(
+                                    children: [
+                                      _buildCarImage(
+                                        car.image,
+                                        width: double.infinity,
+                                        height: 150,
+                                        borderRadius: 15,
+                                      ),
+                                      Positioned(
+                                        top: 8,
+                                        left: 8,
+                                        child: Builder(
+                                          builder: (context) {
+                                            final summary = getCarAvailabilitySummary(car);
+                                            final isAvail = summary == "Available Now";
+                                            return Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                              decoration: BoxDecoration(
+                                                color: (isAvail ? const Color(0xFF1B5E20) : const Color(0xFFE65100)).withOpacity(0.9),
+                                                borderRadius: BorderRadius.circular(8),
+                                              ),
+                                              child: Text(
+                                                isAvail ? "Available" : summary,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                      Positioned(
+                                        top: 8,
+                                        right: 8,
+                                        child: InkWell(
+                                          onTap: () async {
+                                            if (!_requireLogin(action: "save cars to your favorites")) return;
+                                            await toggleFavoriteCar(car.id);
+                                            setState(() {});
+                                          },
+                                          child: Container(
+                                            padding: const EdgeInsets.all(6),
+                                            decoration: BoxDecoration(
+                                              color: Colors.black.withOpacity(0.6),
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: Icon(
+                                              isCarFavorite(car.id) ? Icons.favorite : Icons.favorite_border,
+                                              color: isCarFavorite(car.id) ? Colors.redAccent : Colors.white,
+                                              size: 18,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                   const SizedBox(height: 10),
                                   Text(
@@ -2561,10 +3531,10 @@ class _HomePageState extends State<HomePage> {
                                       ),
                                       const Spacer(),
                                       Text(
-                                        car.transmission,
+                                        "${car.transmission} • ${car.rentalMode == 'Both Available' ? 'Self/Driver' : car.rentalMode}",
                                         style: const TextStyle(
                                           color: Colors.grey,
-                                          fontSize: 12,
+                                          fontSize: 11,
                                         ),
                                       ),
                                     ],
@@ -2676,22 +3646,50 @@ class _HomePageState extends State<HomePage> {
                                     size: 16,
                                   ),
                                   Text(
-                                    " ${car.rating} • ${car.seats}",
+                                    " ${car.rating} • ${car.seats} • ${car.rentalMode == 'Both Available' ? 'Self/Driver' : car.rentalMode}",
                                     style: const TextStyle(
                                       color: Colors.grey,
-                                      fontSize: 13,
+                                      fontSize: 12,
                                     ),
                                   ),
                                 ],
                               ),
                               const SizedBox(height: 6),
-                              Text(
-                                car.price,
-                                style: const TextStyle(
-                                  color: AppTheme.primaryLight,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 15,
-                                ),
+                              Row(
+                                children: [
+                                  Text(
+                                    car.price,
+                                    style: const TextStyle(
+                                      color: AppTheme.primaryLight,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Builder(
+                                    builder: (context) {
+                                      final summary = getCarAvailabilitySummary(car);
+                                      final isAvail = summary == "Available Now";
+                                      return Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: (isAvail ? Colors.green : Colors.amber).withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text(
+                                          isAvail ? "Available" : summary,
+                                          style: TextStyle(
+                                            color: isAvail ? Colors.greenAccent : Colors.amberAccent,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ],
                               ),
                             ],
                           ),
@@ -2730,92 +3728,100 @@ class _HomePageState extends State<HomePage> {
 
   // ================= TAB 1: EXPLORE TAB =================
   Widget _buildExploreTab() {
-    final searchResults = _allCars.where((car) {
-      final query = _searchQuery.toLowerCase().trim();
-      final textMatch = query.isEmpty ||
-          car.name.toLowerCase().contains(query) ||
-          car.brand.toLowerCase().contains(query) ||
-          car.location.toLowerCase().contains(query);
-
-      final cityMatch = _selectedCity == "All Cities" ||
-          car.location.toLowerCase().contains(_selectedCity.toLowerCase());
-
-      final areaMatch = _selectedArea == "All Areas" ||
-          car.location.toLowerCase().contains(_selectedArea.toLowerCase());
-
-      return textMatch && cityMatch && areaMatch;
-    }).toList();
+    final searchResults = _filterCarList(_availableCars, query: _searchQuery);
 
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          TextField(
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              hintText: "Search any car, brand, or model...",
-              hintStyle: const TextStyle(color: Colors.grey),
-              prefixIcon: const Icon(Icons.search, color: AppTheme.primary),
-              suffixIcon: _searchQuery.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear, color: Colors.grey),
-                      onPressed: () {
-                        setState(() {
-                          _searchQuery = "";
-                        });
-                      },
-                    )
-                  : null,
-              filled: true,
-              fillColor: const Color(0xFF1E1E1E),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide.none,
-              ),
-            ),
-            onChanged: (value) {
-              setState(() {
-                _searchQuery = value;
-              });
-            },
-          ),
-          if (_selectedCity != "All Cities") ...[
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: AppTheme.primary.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: AppTheme.primary),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: "Search any car, brand, or model...",
+                    hintStyle: const TextStyle(color: Colors.grey),
+                    prefixIcon: const Icon(Icons.search, color: AppTheme.primary),
+                    suffixIcon: _searchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, color: Colors.grey),
+                            onPressed: () {
+                              setState(() {
+                                _searchQuery = "";
+                              });
+                            },
+                          )
+                        : null,
+                    filled: true,
+                    fillColor: const Color(0xFF1E1E1E),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
+                  onChanged: (value) {
+                    setState(() {
+                      _searchQuery = value;
+                    });
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              InkWell(
+                onTap: () => _showFilterBottomSheet(context),
+                borderRadius: BorderRadius.circular(14),
+                child: Container(
+                  height: 52,
+                  width: 52,
+                  decoration: BoxDecoration(
+                    color: _activeFilterCount > 0
+                        ? AppTheme.primary
+                        : const Color(0xFF1E1E1E),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: _activeFilterCount > 0 ? AppTheme.primary : Colors.white12,
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Stack(
+                    alignment: Alignment.center,
                     children: [
-                      const Icon(Icons.location_on, color: AppTheme.primary, size: 14),
-                      const SizedBox(width: 4),
-                      Text(
-                        "${_selectedArea != 'All Areas' ? '$_selectedArea, ' : ''}$_selectedCity",
-                        style: const TextStyle(color: AppTheme.primaryLight, fontSize: 12, fontWeight: FontWeight.bold),
+                      Icon(
+                        Icons.tune,
+                        color: _activeFilterCount > 0 ? Colors.white : AppTheme.primary,
+                        size: 22,
                       ),
-                      const SizedBox(width: 6),
-                      InkWell(
-                        onTap: () {
-                          setState(() {
-                            _selectedCity = "All Cities";
-                            _selectedArea = "All Areas";
-                          });
-                        },
-                        child: const Icon(Icons.close, color: Colors.white, size: 14),
-                      ),
+                      if (_activeFilterCount > 0)
+                        Positioned(
+                          right: 6,
+                          top: 6,
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: const BoxDecoration(
+                              color: Colors.redAccent,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Text(
+                              "$_activeFilterCount",
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _buildActiveFilterChips(),
           const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2844,9 +3850,26 @@ class _HomePageState extends State<HomePage> {
                         const Icon(Icons.search_off, size: 60, color: Colors.grey),
                         const SizedBox(height: 12),
                         Text(
-                          "No cars found matching \"$_searchQuery\"",
+                          _searchQuery.isNotEmpty
+                              ? "No cars found matching \"$_searchQuery\""
+                              : "No cars match your applied filters",
                           style: const TextStyle(color: Colors.grey, fontSize: 15),
                         ),
+                        if (_activeFilterCount > 0) ...[
+                          const SizedBox(height: 14),
+                          ElevatedButton.icon(
+                            onPressed: _resetAllFilters,
+                            icon: const Icon(Icons.refresh, size: 16),
+                            label: const Text("Reset All Filters"),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppTheme.primary,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   )
@@ -2881,7 +3904,7 @@ class _HomePageState extends State<HomePage> {
                             children: [
                               const SizedBox(height: 3),
                               Text(
-                                "Rs. ${car.price} • ${car.transmission}",
+                                "Rs. ${car.price} • ${car.transmission} • ${car.rentalMode == 'Both Available' ? 'Self/Driver' : car.rentalMode}",
                                 style: const TextStyle(color: Colors.grey, fontSize: 13),
                               ),
                               const SizedBox(height: 4),
@@ -2905,13 +3928,29 @@ class _HomePageState extends State<HomePage> {
                               ),
                             ],
                           ),
-                          trailing: ElevatedButton(
-                            onPressed: () => _navigateToCarDetails(car),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppTheme.primary,
-                              foregroundColor: Colors.white,
-                            ),
-                            child: const Text("Rent"),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: Icon(
+                                  isCarFavorite(car.id) ? Icons.favorite : Icons.favorite_border,
+                                  color: isCarFavorite(car.id) ? Colors.redAccent : Colors.grey,
+                                  size: 20,
+                                ),
+                                onPressed: () async {
+                                  await toggleFavoriteCar(car.id);
+                                  setState(() {});
+                                },
+                              ),
+                              ElevatedButton(
+                                onPressed: () => _navigateToCarDetails(car),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppTheme.primary,
+                                  foregroundColor: Colors.white,
+                                ),
+                                child: const Text("Rent"),
+                              ),
+                            ],
                           ),
                         ),
                       );
@@ -2986,7 +4025,7 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    final currentUserEmail = (widget.email.isNotEmpty ? widget.email : email).trim().toLowerCase();
+    final currentUserEmail = _currentUserEmail;
     final myBookings = userBookingsList.where((b) {
       if (b.customerEmail.isEmpty) return true; // legacy/demo entries
       return b.customerEmail.trim().toLowerCase() == currentUserEmail;
@@ -3058,7 +4097,14 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ),
                   )
-                : ListView.builder(
+                : RefreshIndicator(
+                    color: AppTheme.primary,
+                    backgroundColor: const Color(0xFF1E1E1E),
+                    onRefresh: () async {
+                      await loadBookingsFromLocalStorage();
+                      setState(() {});
+                    },
+                    child: ListView.builder(
                     itemCount: myBookings.length,
                     itemBuilder: (context, index) {
                       final booking = myBookings[index];
@@ -3072,10 +4118,12 @@ class _HomePageState extends State<HomePage> {
                           ? Colors.amber.withOpacity(0.4)
                           : booking.status == "Confirmed"
                               ? Colors.green.withOpacity(0.4)
-                              : booking.status == "Completed"
-                                  ? AppTheme.primary.withOpacity(0.4)
-                                  : Colors.redAccent.withOpacity(0.3),
-                      width: 1.2,
+                              : booking.status == "In Progress"
+                                  ? Colors.cyan.withOpacity(0.5)
+                                  : booking.status == "Completed"
+                                      ? AppTheme.primary.withOpacity(0.4)
+                                      : Colors.redAccent.withOpacity(0.3),
+                      width: (booking.status == "Pending" || booking.status == "In Progress") ? 1.5 : 1.2,
                     ),
                   ),
                   child: Padding(
@@ -3151,9 +4199,11 @@ class _HomePageState extends State<HomePage> {
                                     ? Colors.amber
                                     : booking.status == "Confirmed"
                                         ? Colors.green
-                                        : booking.status == "Completed"
-                                            ? AppTheme.primary
-                                            : Colors.redAccent)
+                                        : booking.status == "In Progress"
+                                            ? Colors.cyan
+                                            : booking.status == "Completed"
+                                                ? AppTheme.primary
+                                                : Colors.redAccent)
                                 .withOpacity(0.1),
                             borderRadius: BorderRadius.circular(8),
                           ),
@@ -3164,17 +4214,21 @@ class _HomePageState extends State<HomePage> {
                                     ? Icons.hourglass_top_rounded
                                     : booking.status == "Confirmed"
                                         ? Icons.check_circle_outline
-                                        : booking.status == "Completed"
-                                            ? Icons.celebration_outlined
-                                            : Icons.info_outline,
+                                        : booking.status == "In Progress"
+                                            ? Icons.vpn_key_outlined
+                                            : booking.status == "Completed"
+                                                ? Icons.celebration_outlined
+                                                : Icons.info_outline,
                                 size: 14,
                                 color: booking.status == "Pending"
                                     ? Colors.amber
                                     : booking.status == "Confirmed"
                                         ? Colors.green
-                                        : booking.status == "Completed"
-                                            ? AppTheme.primaryLight
-                                            : Colors.redAccent,
+                                        : booking.status == "In Progress"
+                                            ? Colors.cyanAccent
+                                            : booking.status == "Completed"
+                                                ? AppTheme.primaryLight
+                                                : Colors.redAccent,
                               ),
                               const SizedBox(width: 6),
                               Expanded(
@@ -3182,19 +4236,23 @@ class _HomePageState extends State<HomePage> {
                                   booking.status == "Pending"
                                       ? "Request sent to host. Awaiting host approval."
                                       : booking.status == "Confirmed"
-                                          ? "Host accepted your booking! Ready for pickup."
-                                          : booking.status == "Completed"
-                                              ? "Rental completed. Thanks for choosing us!"
-                                              : "Host was unable to accept this request.",
+                                          ? "Host accepted your booking! Ready for pickup & handover."
+                                          : booking.status == "In Progress"
+                                              ? "Keys handed over! Trip is currently in progress."
+                                              : booking.status == "Completed"
+                                                  ? "Rental completed. Thanks for choosing us!"
+                                                  : "Host was unable to accept this request.",
                                   style: TextStyle(
                                     fontSize: 11,
                                     color: booking.status == "Pending"
                                         ? Colors.amber.shade200
                                         : booking.status == "Confirmed"
                                             ? Colors.green.shade200
-                                            : booking.status == "Completed"
-                                                ? AppTheme.primaryLight
-                                                : Colors.red.shade200,
+                                            : booking.status == "In Progress"
+                                                ? Colors.cyanAccent
+                                                : booking.status == "Completed"
+                                                    ? AppTheme.primaryLight
+                                                    : Colors.red.shade200,
                                   ),
                                 ),
                               ),
@@ -3226,37 +4284,77 @@ class _HomePageState extends State<HomePage> {
                                 ),
                               ],
                             ),
-                            TextButton.icon(
-                              onPressed: () {
-                                setState(() {
-                                  userBookingsList.removeAt(index);
-                                  saveBookingsToLocalStorage();
-                                });
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(booking.status == "Declined" ||
-                                            booking.status == "Completed"
-                                        ? "Booking removed from history"
-                                        : "Booking cancelled successfully"),
-                                    backgroundColor: Colors.redAccent,
+                            Row(
+                              children: [
+                                if (booking.status != "In Progress")
+                                  TextButton.icon(
+                                    onPressed: () {
+                                      setState(() {
+                                        userBookingsList.removeAt(index);
+                                        saveBookingsToLocalStorage();
+                                      });
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text(booking.status == "Declined" ||
+                                                  booking.status == "Completed"
+                                              ? "Booking removed from history"
+                                              : "Booking cancelled successfully"),
+                                          backgroundColor: Colors.redAccent,
+                                        ),
+                                      );
+                                    },
+                                    icon: Icon(
+                                      booking.status == "Declined" ||
+                                              booking.status == "Completed"
+                                          ? Icons.delete_outline
+                                          : Icons.cancel_outlined,
+                                      color: Colors.redAccent,
+                                      size: 16,
+                                    ),
+                                    label: Text(
+                                      booking.status == "Declined" ||
+                                              booking.status == "Completed"
+                                          ? "Remove"
+                                          : "Cancel",
+                                      style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                                    ),
                                   ),
-                                );
-                              },
-                              icon: Icon(
-                                booking.status == "Declined" ||
-                                        booking.status == "Completed"
-                                    ? Icons.delete_outline
-                                    : Icons.cancel_outlined,
-                                color: Colors.redAccent,
-                                size: 18,
-                              ),
-                              label: Text(
-                                booking.status == "Declined" ||
-                                        booking.status == "Completed"
-                                    ? "Remove"
-                                    : "Cancel",
-                                style: const TextStyle(color: Colors.redAccent),
-                              ),
+                                const SizedBox(width: 8),
+                                ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: booking.status == "In Progress"
+                                        ? Colors.cyan.shade700
+                                        : AppTheme.primary,
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                  ),
+                                  onPressed: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => BookingDetailsScreen(
+                                          booking: booking,
+                                          currentUserEmail: widget.email.isNotEmpty ? widget.email : email,
+                                          currentUserName: widget.name.isNotEmpty ? widget.name : name,
+                                        ),
+                                      ),
+                                    ).then((_) => setState(() {}));
+                                  },
+                                  icon: Icon(
+                                    booking.status == "In Progress"
+                                        ? Icons.directions_car
+                                        : Icons.arrow_forward,
+                                    size: 14,
+                                  ),
+                                  label: Text(
+                                    booking.status == "In Progress"
+                                        ? "Active Trip"
+                                        : (booking.status == "Confirmed" ? "View Booking" : "Track Trip"),
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
                         ),
@@ -3266,6 +4364,7 @@ class _HomePageState extends State<HomePage> {
                 );
               },
             ),
+          ),
           ),
         ],
       ),
@@ -3327,7 +4426,34 @@ class _HomePageState extends State<HomePage> {
 
           // ================= CONDITIONAL PROFILE OPTIONS =================
           if (!_isOwnerMode) ...[
-            // CUSTOMER (RENTER) ONLY - No "Add Car" here
+            // CUSTOMER (RENTER) ONLY
+            _buildProfileOption(
+              icon: Icons.verified_user_outlined,
+              title: "CNIC & License Verification",
+              subtitle: currentUserVerification.isVerified ? "✅ Verified Renter Shield Active" : "Upload CNIC & Driving License for instant booking",
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const VerificationScreen()),
+                ).then((_) => setState(() {}));
+              },
+            ),
+            _buildProfileOption(
+              icon: Icons.favorite_border,
+              title: "My Saved Wishlist",
+              subtitle: "${favoriteCarIds.length} vehicles saved for future trips",
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => FavoritesScreen(
+                      userEmail: widget.email.isNotEmpty ? widget.email : email,
+                      userName: widget.name.isNotEmpty ? widget.name : name,
+                    ),
+                  ),
+                ).then((_) => setState(() {}));
+              },
+            ),
             _buildProfileOption(
               icon: Icons.calendar_month,
               title: "My Rental Bookings",
@@ -3338,13 +4464,13 @@ class _HomePageState extends State<HomePage> {
             ),
             _buildProfileOption(
               icon: Icons.account_balance_wallet_outlined,
-              title: "Payment Methods & Wallet",
-              subtitle: "Credit/Debit cards & EasyPaisa/JazzCash",
+              title: "Payment Methods & Security Deposit",
+              subtitle: "Cash on Handover, EasyPaisa, JazzCash & Cards",
               onTap: () {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content: Text("Payment methods & digital wallet settings"),
-                    duration: Duration(seconds: 1),
+                    content: Text("Payment methods and refundable security deposit settings"),
+                    duration: Duration(seconds: 2),
                   ),
                 );
               },
@@ -3356,7 +4482,7 @@ class _HomePageState extends State<HomePage> {
               onTap: () {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content: Text("Customer Helpline: +92 51 111-RENT"),
+                    content: Text("Customer Helpline: +92 51 111-RENT (7368)"),
                     duration: Duration(seconds: 2),
                   ),
                 );
@@ -3365,11 +4491,33 @@ class _HomePageState extends State<HomePage> {
           ] else ...[
             // OWNER (HOST) ONLY
             _buildProfileOption(
+              icon: Icons.account_balance,
+              title: "Earnings & Bank Payout",
+              subtitle: "Meezan / HBL Bank (IBAN), JazzCash & withdrawal ledger",
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const HostEarningsScreen()),
+                ).then((_) => setState(() {}));
+              },
+            ),
+            _buildProfileOption(
+              icon: Icons.verified_user_outlined,
+              title: "Host Identity Verification",
+              subtitle: currentUserVerification.isVerified ? "✅ Verified Host Status Active" : "Verify CNIC to list vehicles with priority",
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const VerificationScreen()),
+                ).then((_) => setState(() {}));
+              },
+            ),
+            _buildProfileOption(
               icon: Icons.directions_car,
               title: "My Listed Fleet",
               subtitle: "${allCarsList.where((c) => c.isUserCar).length} vehicles in fleet",
               onTap: () {
-                setState(() => _currentIndex = 1);
+                setState(() => _currentIndex = 2);
               },
             ),
             _buildProfileOption(
@@ -3377,30 +4525,17 @@ class _HomePageState extends State<HomePage> {
               title: "Add a New Car",
               subtitle: "List another vehicle for rent",
               onTap: () {
-                setState(() => _currentIndex = 2);
-              },
-            ),
-            _buildProfileOption(
-              icon: Icons.payments_outlined,
-              title: "Earnings & Payouts",
-              subtitle: "Bank account & payout schedule",
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Host earnings & bank payout settings"),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
+                setState(() => _currentIndex = 3);
               },
             ),
             _buildProfileOption(
               icon: Icons.shield_outlined,
               title: "Host Protection Policy",
-              subtitle: "Comprehensive rental coverage",
+              subtitle: "Comprehensive rental coverage & damage security",
               onTap: () {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content: Text("All trips are covered under host liability policy"),
+                    content: Text("All trips are covered under host liability & security deposit policy"),
                     duration: Duration(seconds: 2),
                   ),
                 );

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'theme.dart';
 import 'user_data.dart';
+import 'chat_screen.dart';
+import 'vehicle_inspection_screen.dart';
 
 class OwnerBookingsScreen extends StatefulWidget {
   final bool isEmbedded;
@@ -96,6 +98,68 @@ class _OwnerBookingsScreenState extends State<OwnerBookingsScreen> {
         behavior: SnackBarBehavior.floating,
       ),
     );
+  }
+
+  Future<void> _startTrip(BookingItem booking) async {
+    setState(() {
+      booking.status = "In Progress";
+    });
+    await saveBookingsToLocalStorage();
+    widget.onBookingsChanged?.call();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.key, color: Colors.white, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                "Keys handed over for ${booking.car.name}! Trip is now In Progress.",
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.cyan.shade800,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _startTripWithInspection(BookingItem booking) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => VehicleInspectionScreen(
+          booking: booking,
+          inspectionType: "Pre-Trip Handover",
+          isReadOnly: false,
+          inspectorName: "Ali Raza (Host)",
+        ),
+      ),
+    );
+    if (result == true && mounted) {
+      widget.onBookingsChanged?.call();
+      setState(() {});
+    }
+  }
+
+  Future<void> _completeBookingWithInspection(BookingItem booking) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => VehicleInspectionScreen(
+          booking: booking,
+          inspectionType: "Post-Trip Return",
+          isReadOnly: false,
+          inspectorName: "Ali Raza (Host)",
+        ),
+      ),
+    );
+    if (result == true && mounted) {
+      widget.onBookingsChanged?.call();
+      setState(() {});
+    }
   }
 
   Future<void> _declineBooking(BookingItem booking) async {
@@ -227,6 +291,11 @@ class _OwnerBookingsScreenState extends State<OwnerBookingsScreen> {
         color = Colors.green;
         icon = Icons.check_circle_outline;
         text = "Confirmed";
+        break;
+      case "in progress":
+        color = Colors.cyan;
+        icon = Icons.key;
+        text = "In Progress";
         break;
       case "completed":
         color = AppTheme.primaryLight;
@@ -365,6 +434,7 @@ class _OwnerBookingsScreenState extends State<OwnerBookingsScreen> {
                 _buildStatusChip("All", "All", AppTheme.primaryLight),
                 _buildStatusChip("Pending", "Pending", Colors.amber),
                 _buildStatusChip("Confirmed", "Confirmed", Colors.green),
+                _buildStatusChip("In Progress", "In Progress", Colors.cyan),
                 _buildStatusChip("Completed", "Completed", AppTheme.primary),
                 _buildStatusChip("Declined", "Declined", Colors.redAccent),
               ],
@@ -555,14 +625,14 @@ class _OwnerBookingsScreenState extends State<OwnerBookingsScreen> {
                                       ),
                                     ),
                                   ),
-                                  const SizedBox(width: 10),
+                                  const SizedBox(width: 8),
                                   Expanded(
                                     child: ElevatedButton.icon(
                                       onPressed: () => _acceptBooking(booking),
                                       icon: const Icon(Icons.check,
                                           size: 16, color: Colors.white),
                                       label: const Text(
-                                        "Accept Request",
+                                        "Accept",
                                         style: TextStyle(
                                           color: Colors.white,
                                           fontWeight: FontWeight.bold,
@@ -580,36 +650,162 @@ class _OwnerBookingsScreenState extends State<OwnerBookingsScreen> {
                                       ),
                                     ),
                                   ),
+                                  const SizedBox(width: 8),
+                                  IconButton(
+                                    tooltip: "Chat with Renter",
+                                    icon: const Icon(Icons.chat_bubble_outline, color: AppTheme.primaryLight, size: 20),
+                                    style: IconButton.styleFrom(
+                                      side: const BorderSide(color: AppTheme.primary),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    ),
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => ChatScreen(
+                                            bookingId: booking.id,
+                                            carName: booking.car.name,
+                                            otherPartyName: booking.customerName.isNotEmpty ? booking.customerName : "Renter",
+                                            isHostViewing: true,
+                                            currentUserEmail: "host@example.com",
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
                                 ],
                               ),
                             ] else if (booking.status == "Confirmed") ...[
                               const SizedBox(height: 12),
                               const Divider(color: Colors.white10),
                               const SizedBox(height: 6),
-                              SizedBox(
-                                width: double.infinity,
-                                child: ElevatedButton.icon(
-                                  onPressed: () => _completeBooking(booking),
-                                  icon: const Icon(Icons.task_alt,
-                                      size: 16, color: Colors.white),
-                                  label: const Text(
-                                    "Mark Trip Completed",
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13,
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: ElevatedButton.icon(
+                                      onPressed: () => _startTrip(booking),
+                                      icon: const Icon(Icons.key,
+                                          size: 16, color: Colors.white),
+                                      label: const Text(
+                                        "Handover Keys & Start Trip",
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.cyan.shade800,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(10),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 10),
+                                      ),
                                     ),
                                   ),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: AppTheme.primary,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius:
-                                          BorderRadius.circular(10),
+                                  const SizedBox(width: 8),
+                                  OutlinedButton.icon(
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => ChatScreen(
+                                            bookingId: booking.id,
+                                            carName: booking.car.name,
+                                            otherPartyName: booking.customerName.isNotEmpty ? booking.customerName : "Renter",
+                                            isHostViewing: true,
+                                            currentUserEmail: "host@example.com",
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    icon: const Icon(Icons.chat_bubble_outline, size: 16, color: AppTheme.primaryLight),
+                                    label: const Text(
+                                      "Chat",
+                                      style: TextStyle(
+                                        color: AppTheme.primaryLight,
+                                        fontSize: 13,
+                                      ),
                                     ),
-                                    padding: const EdgeInsets.symmetric(
-                                        vertical: 10),
+                                    style: OutlinedButton.styleFrom(
+                                      side: const BorderSide(color: AppTheme.primary),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(10),
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 10, horizontal: 12),
+                                    ),
                                   ),
-                                ),
+                                ],
+                              ),
+                            ] else if (booking.status == "In Progress") ...[
+                              const SizedBox(height: 12),
+                              const Divider(color: Colors.white10),
+                              const SizedBox(height: 6),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: ElevatedButton.icon(
+                                      onPressed: () => _completeBooking(booking),
+                                      icon: const Icon(Icons.task_alt,
+                                          size: 16, color: Colors.white),
+                                      label: const Text(
+                                        "Mark Trip Completed",
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: AppTheme.primary,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(10),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 10),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  OutlinedButton.icon(
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => ChatScreen(
+                                            bookingId: booking.id,
+                                            carName: booking.car.name,
+                                            otherPartyName: booking.customerName.isNotEmpty ? booking.customerName : "Renter",
+                                            isHostViewing: true,
+                                            currentUserEmail: "host@example.com",
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    icon: const Icon(Icons.chat_bubble_outline, size: 16, color: AppTheme.primaryLight),
+                                    label: const Text(
+                                      "Chat",
+                                      style: TextStyle(
+                                        color: AppTheme.primaryLight,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      side: const BorderSide(color: AppTheme.primary),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(10),
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 10, horizontal: 12),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ] else if (booking.status == "Completed") ...[
                               const SizedBox(height: 10),

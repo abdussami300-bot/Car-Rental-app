@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'theme.dart';
 import 'user_data.dart';
+import 'checkout_screen.dart';
+import 'verification_screen.dart';
+import 'chat_screen.dart';
+import 'review_screen.dart';
 
 class CarDetails extends StatefulWidget {
   final String carName;
@@ -13,6 +17,7 @@ class CarDetails extends StatefulWidget {
   final String speed;
   final String location;
   final String description;
+  final String rentalMode;
   final String availableFrom;
   final String availableTo;
   final Map<String, String>? photos;
@@ -31,6 +36,7 @@ class CarDetails extends StatefulWidget {
     this.speed = "220 km/h",
     this.location = "Islamabad, Pakistan",
     this.description = "Well maintained vehicle ready for your trip. Excellent condition with regular service history and premium interior.",
+    this.rentalMode = "Both Available",
     this.availableFrom = "Available Now",
     this.availableTo = "Always Open",
     this.photos,
@@ -45,10 +51,35 @@ class CarDetails extends StatefulWidget {
 class _CarDetailsState extends State<CarDetails> {
   late final PageController _pageController;
   int _currentPhotoIndex = 0;
-  bool _isFavorite = false;
   int _rentalDays = 2;
   DateTime _pickupDate = DateTime.now();
   DateTime _returnDate = DateTime.now().add(const Duration(days: 2));
+
+  CarItem get _currentCar {
+    for (final c in allCarsList) {
+      if (c.name.toLowerCase().trim() == widget.carName.toLowerCase().trim()) {
+        return c;
+      }
+    }
+    return CarItem(
+      id: widget.carName.hashCode.abs().toString(),
+      name: widget.carName,
+      brand: "Car",
+      price: widget.price,
+      rating: widget.rating,
+      image: widget.carImage,
+      seats: widget.seats,
+      transmission: widget.transmission,
+      fuelType: widget.fuelType,
+      speed: widget.speed,
+      location: widget.location,
+      description: widget.description,
+      rentalMode: widget.rentalMode,
+      availableFrom: widget.availableFrom,
+      availableTo: widget.availableTo,
+      photos: widget.photos,
+    );
+  }
 
   List<MapEntry<String, String>> get _photosList {
     final list = <MapEntry<String, String>>[];
@@ -69,6 +100,15 @@ class _CarDetailsState extends State<CarDetails> {
   void initState() {
     super.initState();
     _pageController = PageController();
+    final today = DateTime.now();
+    DateTime checkDate = DateTime(today.year, today.month, today.day);
+    if (isDateBookedForCar(_currentCar, checkDate)) {
+      while (isDateBookedForCar(_currentCar, checkDate)) {
+        checkDate = checkDate.add(const Duration(days: 1));
+      }
+    }
+    _pickupDate = checkDate;
+    _returnDate = _pickupDate.add(Duration(days: _rentalDays));
   }
 
   @override
@@ -99,24 +139,40 @@ class _CarDetailsState extends State<CarDetails> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (modalContext) {
+        String chosenDriveOption = widget.rentalMode == "With Driver" ? "With Driver" : "Self-Drive";
         return StatefulBuilder(
           builder: (context, setModalState) {
             final totalAmount = _rentalDays * _dailyRate;
+            final isRangeAvailable = isCarAvailableForRange(_currentCar, _pickupDate, _returnDate);
+            final bookedRanges = getBookedDateRangesForCar(_currentCar);
 
             Future<void> pickPickupDate() async {
               final now = DateTime.now();
+              final today = DateTime(now.year, now.month, now.day);
+              DateTime initDate = _pickupDate.isBefore(today) ? today : _pickupDate;
+              if (isDateBookedForCar(_currentCar, initDate)) {
+                DateTime check = today;
+                while (isDateBookedForCar(_currentCar, check) && check.isBefore(today.add(const Duration(days: 365)))) {
+                  check = check.add(const Duration(days: 1));
+                }
+                initDate = check;
+              }
+
               final picked = await showDatePicker(
                 context: context,
-                initialDate: _pickupDate,
-                firstDate: now,
-                lastDate: now.add(const Duration(days: 365)),
+                initialDate: initDate,
+                firstDate: today,
+                lastDate: today.add(const Duration(days: 365)),
+                selectableDayPredicate: (day) {
+                  return !isDateBookedForCar(_currentCar, day);
+                },
                 builder: (context, child) {
                   return Theme(
                     data: ThemeData.dark().copyWith(
                       colorScheme: const ColorScheme.dark(
                         primary: AppTheme.primary,
                         onPrimary: Colors.white,
-                        surface: Color(0xFF1E1E1E),
+                        surface: const Color(0xFF1E1E1E),
                         onSurface: Colors.white,
                       ),
                       dialogBackgroundColor: const Color(0xFF1E1E1E),
@@ -136,18 +192,31 @@ class _CarDetailsState extends State<CarDetails> {
             }
 
             Future<void> pickReturnDate() async {
+              final firstPossible = _pickupDate.add(const Duration(days: 1));
+              DateTime initDate = _returnDate.isBefore(firstPossible) ? firstPossible : _returnDate;
+              if (isDateBookedForCar(_currentCar, initDate)) {
+                DateTime check = firstPossible;
+                while (isDateBookedForCar(_currentCar, check) && check.isBefore(_pickupDate.add(const Duration(days: 365)))) {
+                  check = check.add(const Duration(days: 1));
+                }
+                initDate = check;
+              }
+
               final picked = await showDatePicker(
                 context: context,
-                initialDate: _returnDate.isBefore(_pickupDate) ? _pickupDate.add(const Duration(days: 1)) : _returnDate,
-                firstDate: _pickupDate.add(const Duration(days: 1)),
+                initialDate: initDate,
+                firstDate: firstPossible,
                 lastDate: _pickupDate.add(const Duration(days: 365)),
+                selectableDayPredicate: (day) {
+                  return !isDateBookedForCar(_currentCar, day);
+                },
                 builder: (context, child) {
                   return Theme(
                     data: ThemeData.dark().copyWith(
                       colorScheme: const ColorScheme.dark(
                         primary: AppTheme.primary,
                         onPrimary: Colors.white,
-                        surface: Color(0xFF1E1E1E),
+                        surface: const Color(0xFF1E1E1E),
                         onSurface: Colors.white,
                       ),
                       dialogBackgroundColor: const Color(0xFF1E1E1E),
@@ -224,6 +293,80 @@ class _CarDetailsState extends State<CarDetails> {
                     ],
                   ),
                   const SizedBox(height: 16),
+
+                  // ================= SERVICE OPTION SELECTOR =================
+                  if (widget.rentalMode == "Both Available") ...[
+                    const Text(
+                      "Service Option",
+                      style: TextStyle(
+                        color: Colors.grey,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: ["Self-Drive", "With Driver"].map((opt) {
+                        final isSel = chosenDriveOption == opt;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                            avatar: Icon(
+                              opt == "Self-Drive" ? Icons.drive_eta : Icons.person_pin,
+                              size: 16,
+                              color: isSel ? Colors.white : Colors.grey,
+                            ),
+                            label: Text(opt),
+                            selected: isSel,
+                            selectedColor: AppTheme.primary,
+                            backgroundColor: const Color(0xFF252525),
+                            labelStyle: TextStyle(
+                              color: isSel ? Colors.white : Colors.white70,
+                              fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                              fontSize: 12,
+                            ),
+                            onSelected: (val) {
+                              if (val) setModalState(() => chosenDriveOption = opt);
+                            },
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 16),
+                  ] else ...[
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: Colors.teal.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.teal.withOpacity(0.3)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                widget.rentalMode == "With Driver" ? Icons.person_pin : Icons.drive_eta,
+                                size: 14,
+                                color: Colors.tealAccent,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                "Service Option: ${widget.rentalMode}",
+                                style: const TextStyle(
+                                  color: Colors.tealAccent,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                  ],
 
                   // ================= PICKUP & RETURN DATE PICKERS =================
                   const Text(
@@ -308,6 +451,80 @@ class _CarDetailsState extends State<CarDetails> {
                       ),
                     ],
                   ),
+
+                  // Booked Schedule Info
+                  if (bookedRanges.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.orange.withOpacity(0.25)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.event_busy, color: Colors.orangeAccent, size: 14),
+                              SizedBox(width: 6),
+                              Text(
+                                "Reserved Schedules for this vehicle:",
+                                style: TextStyle(color: Colors.orangeAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 4,
+                            children: bookedRanges.map((r) {
+                              return Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: Colors.black45,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: Colors.white12),
+                                ),
+                                child: Text(
+                                  "${_formatDate(r.start)} - ${_formatDate(r.end)}",
+                                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+
+                  // Overlap Conflict Warning Banner
+                  if (!isRangeAvailable) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 18),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              "Selected dates overlap with an existing booking for this car. Please choose different dates.",
+                              style: TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
 
                   const SizedBox(height: 16),
                   Row(
@@ -442,13 +659,24 @@ class _CarDetailsState extends State<CarDetails> {
                     height: 50,
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: AppTheme.primary,
+                        backgroundColor: isRangeAvailable ? AppTheme.primary : Colors.grey.shade800,
                         foregroundColor: Colors.white,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
                       ),
                       onPressed: () async {
+                        if (!isRangeAvailable) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text("These dates are already booked for this car. Please select available dates on the calendar."),
+                              backgroundColor: Colors.redAccent,
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                          return;
+                        }
+
                         final userEmail = widget.currentUserEmail.isNotEmpty
                             ? widget.currentUserEmail
                             : email;
@@ -467,81 +695,86 @@ class _CarDetailsState extends State<CarDetails> {
                           return;
                         }
 
-                        // Find or construct matching car
-                        CarItem? matched;
-                        for (final c in allCarsList) {
-                          if (c.name == widget.carName) {
-                            matched = c;
-                            break;
-                          }
-                        }
-                        matched ??= CarItem(
-                          id: DateTime.now().millisecondsSinceEpoch.toString(),
-                          name: widget.carName,
-                          brand: "Car",
-                          price: widget.price,
-                          rating: widget.rating,
-                          image: widget.carImage,
-                          seats: widget.seats,
-                          transmission: widget.transmission,
-                          availableFrom: widget.availableFrom,
-                          availableTo: widget.availableTo,
-                        );
-
-                        // Save to bookings as Pending request for host review
-                        userBookingsList.add(
-                          BookingItem(
-                            id: DateTime.now().millisecondsSinceEpoch.toString(),
-                            car: matched,
-                            days: _rentalDays,
-                            totalPrice: totalAmount,
-                            bookingDate: DateTime.now(),
-                            pickupDate: _formatDate(_pickupDate),
-                            returnDate: _formatDate(_returnDate),
-                            status: "Pending",
-                            customerEmail: userEmail,
-                            customerName: widget.currentUserName.isNotEmpty
-                                ? widget.currentUserName
-                                : name,
-                          ),
-                        );
-                        await saveBookingsToLocalStorage();
-
-                        Navigator.pop(modalContext); // Close modal
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Row(
-                              children: [
-                                const Icon(Icons.schedule, color: Colors.amber, size: 20),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    "Rental Request Sent for ${widget.carName}! Waiting for host approval.",
-                                    style: const TextStyle(fontWeight: FontWeight.w600),
+                        // Check Identity & Driving License Verification
+                        if (!currentUserVerification.isVerified) {
+                          Navigator.pop(modalContext);
+                          final wantVerify = await showDialog<bool>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              backgroundColor: const Color(0xFF1E1E1E),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              title: const Row(
+                                children: [
+                                  Icon(Icons.verified_user_outlined, color: AppTheme.primary, size: 24),
+                                  SizedBox(width: 8),
+                                  Text("Verification Required", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                                ],
+                              ),
+                              content: const Text(
+                                "For security and insurance compliance in Pakistan, CNIC and Driving License verification is required before booking.",
+                                style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                                ),
+                                ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppTheme.primary,
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                                   ),
+                                  onPressed: () => Navigator.pop(ctx, true),
+                                  child: const Text("Verify Now"),
                                 ),
                               ],
                             ),
-                            backgroundColor: const Color(0xFF252525),
-                            behavior: SnackBarBehavior.floating,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              side: const BorderSide(color: Colors.amber),
+                          );
+
+                          if (wantVerify == true && mounted) {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (context) => const VerificationScreen()),
+                            );
+                          }
+                          return;
+                        }
+
+                        // Close modal and proceed to Checkout
+                        Navigator.pop(modalContext);
+
+                        final booked = await Navigator.push<bool>(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => CheckoutScreen(
+                              car: _currentCar,
+                              days: _rentalDays,
+                              basePricePerDay: _dailyRate,
+                              pickupDate: _formatDate(_pickupDate),
+                              returnDate: _formatDate(_returnDate),
+                              chosenDriveOption: chosenDriveOption,
+                              currentUserEmail: userEmail,
+                              currentUserName: widget.currentUserName.isNotEmpty
+                                  ? widget.currentUserName
+                                  : name,
                             ),
-                            duration: const Duration(seconds: 4),
                           ),
                         );
-                        Navigator.pop(context); // Return to home
+
+                        if (booked == true && mounted) {
+                          setState(() {});
+                        }
                       },
-                      child: const Row(
+                      child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.send_rounded, size: 18),
-                          SizedBox(width: 8),
+                          Icon(isRangeAvailable ? Icons.payment : Icons.event_busy, size: 18),
+                          const SizedBox(width: 8),
                           Text(
-                            "Send Rental Request",
-                            style: TextStyle(
-                              fontSize: 16,
+                            isRangeAvailable ? "Proceed to Checkout" : "Dates Unavailable (Choose New Dates)",
+                            style: const TextStyle(
+                              fontSize: 15,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -571,23 +804,25 @@ class _CarDetailsState extends State<CarDetails> {
         title: const Text("Car Details"),
         actions: [
           IconButton(
-            onPressed: () {
-              setState(() {
-                _isFavorite = !_isFavorite;
-              });
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(_isFavorite
-                      ? "${widget.carName} added to favorites!"
-                      : "${widget.carName} removed from favorites!"),
-                  duration: const Duration(seconds: 1),
-                  backgroundColor: AppTheme.primary,
-                ),
-              );
+            onPressed: () async {
+              await toggleFavoriteCar(_currentCar.id);
+              setState(() {});
+              final isFav = isCarFavorite(_currentCar.id);
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(isFav
+                        ? "${widget.carName} added to favorites!"
+                        : "${widget.carName} removed from favorites!"),
+                    duration: const Duration(seconds: 1),
+                    backgroundColor: AppTheme.primary,
+                  ),
+                );
+              }
             },
             icon: Icon(
-              _isFavorite ? Icons.favorite : Icons.favorite_border,
-              color: _isFavorite ? Colors.redAccent : AppTheme.primaryLight,
+              isCarFavorite(_currentCar.id) ? Icons.favorite : Icons.favorite_border,
+              color: isCarFavorite(_currentCar.id) ? Colors.redAccent : AppTheme.primaryLight,
             ),
           ),
         ],
@@ -887,6 +1122,81 @@ class _CarDetailsState extends State<CarDetails> {
                 ),
               ),
 
+              // ---------- RENTAL MODE BADGE ----------
+              Container(
+                margin: const EdgeInsets.only(top: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.teal.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.teal.withOpacity(0.4)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      widget.rentalMode == "With Driver"
+                          ? Icons.person_pin
+                          : (widget.rentalMode == "Self-Drive" ? Icons.drive_eta : Icons.all_inclusive),
+                      color: Colors.tealAccent,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      widget.rentalMode == "Both Available"
+                          ? "Rental Mode: Self-Drive & With Driver (Both Available)"
+                          : "Rental Mode: ${widget.rentalMode}",
+                      style: const TextStyle(
+                        color: Colors.tealAccent,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // ---------- REAL-TIME CALENDAR AVAILABILITY BADGE ----------
+              Builder(
+                builder: (context) {
+                  final summary = getCarAvailabilitySummary(_currentCar);
+                  final isAvail = summary == "Available Now";
+                  final color = isAvail
+                      ? Colors.greenAccent
+                      : (summary.contains("On Trip") ? Colors.amberAccent : Colors.orangeAccent);
+                  return Container(
+                    margin: const EdgeInsets.only(top: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: color.withOpacity(0.4)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isAvail
+                              ? Icons.check_circle_outline
+                              : (summary.contains("On Trip") ? Icons.directions_car : Icons.event_busy),
+                          color: color,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          "Calendar Status: $summary",
+                          style: TextStyle(
+                            color: color,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+
               const SizedBox(height: 20),
 
               // ---------- 4. SPECIFICATIONS FIELDS ----------
@@ -1045,7 +1355,237 @@ class _CarDetailsState extends State<CarDetails> {
                 ),
               ),
 
-              const SizedBox(height: 30),
+              const SizedBox(height: 16),
+
+              // ---------- HOST CONTACT CARD ----------
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E1E1E),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 22,
+                      backgroundColor: AppTheme.primary.withOpacity(0.2),
+                      child: const Icon(Icons.person, color: AppTheme.primaryLight, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Host: Ali Raza (Verified)",
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            "★ 4.9 Rating • 100% Response Rate",
+                            style: TextStyle(color: Colors.grey, fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        final userEmail = widget.currentUserEmail.isNotEmpty ? widget.currentUserEmail : email;
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ChatScreen(
+                              bookingId: "pre_booking_${widget.carName.hashCode.abs()}",
+                              carName: widget.carName,
+                              otherPartyName: "Ali Raza (Host)",
+                              isHostViewing: false,
+                              currentUserEmail: userEmail,
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.chat_bubble_outline, size: 14, color: AppTheme.primaryLight),
+                      label: const Text("Chat", style: TextStyle(color: AppTheme.primaryLight, fontSize: 12)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: AppTheme.primary),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
+              // ---------- CUSTOMER REVIEWS & RATINGS ----------
+              Builder(
+                builder: (context) {
+                  final reviews = getReviewsForCar(widget.carName, carId: _currentCar.id);
+                  final userEmail = widget.currentUserEmail.isNotEmpty ? widget.currentUserEmail : email;
+                  final userName = widget.currentUserName.isNotEmpty ? widget.currentUserName : name;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              const Text(
+                                "Reviews & Ratings",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.star, color: Colors.amber, size: 14),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      "${widget.rating} (${reviews.length})",
+                                      style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          TextButton.icon(
+                            onPressed: () async {
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => ReviewScreen(
+                                    carId: _currentCar.id,
+                                    carName: widget.carName,
+                                    userEmail: userEmail,
+                                    userName: userName,
+                                  ),
+                                ),
+                              );
+                              setState(() {});
+                            },
+                            icon: const Icon(Icons.rate_review_outlined, size: 15, color: AppTheme.primaryLight),
+                            label: const Text("Write Review", style: TextStyle(color: AppTheme.primaryLight, fontSize: 12)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      if (reviews.isEmpty) ...[
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E1E1E),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Row(
+                            children: [
+                              Icon(Icons.info_outline, color: Colors.grey, size: 18),
+                              SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  "No reviews submitted yet. Rent this car and be the first to share your experience!",
+                                  style: TextStyle(color: Colors.grey, fontSize: 12),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ] else ...[
+                        ...reviews.map((rev) => Container(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E1E1E),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: Colors.white10),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Row(
+                                    children: [
+                                      CircleAvatar(
+                                        radius: 14,
+                                        backgroundColor: AppTheme.primary.withOpacity(0.2),
+                                        child: Text(
+                                          rev.userName.isNotEmpty ? rev.userName[0].toUpperCase() : "U",
+                                          style: const TextStyle(color: AppTheme.primaryLight, fontWeight: FontWeight.bold, fontSize: 12),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        rev.userName,
+                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: Colors.green.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: const Text("Verified", style: TextStyle(color: Colors.greenAccent, fontSize: 9, fontWeight: FontWeight.bold)),
+                                      ),
+                                    ],
+                                  ),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.star, color: Colors.amber, size: 14),
+                                      const SizedBox(width: 3),
+                                      Text(
+                                        rev.rating.toStringAsFixed(1),
+                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                              if (rev.tags.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 6,
+                                  runSpacing: 4,
+                                  children: rev.tags.map((t) => Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.06),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(t, style: const TextStyle(color: Colors.white70, fontSize: 10)),
+                                  )).toList(),
+                                ),
+                              ],
+                              const SizedBox(height: 8),
+                              Text(
+                                rev.comment,
+                                style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.4),
+                              ),
+                            ],
+                          ),
+                        )),
+                      ],
+                    ],
+                  );
+                },
+              ),
+
+              const SizedBox(height: 24),
 
               // ---------- 7. RENT NOW / ACTIVE BOOKING STATUS BUTTON ----------
               Builder(
@@ -1065,13 +1605,17 @@ class _CarDetailsState extends State<CarDetails> {
                           decoration: BoxDecoration(
                             color: (myActiveBooking?.status == "Pending"
                                     ? Colors.amber
-                                    : Colors.green)
+                                    : myActiveBooking?.status == "In Progress"
+                                        ? Colors.cyan
+                                        : Colors.green)
                                 .withOpacity(0.12),
                             borderRadius: BorderRadius.circular(14),
                             border: Border.all(
                               color: myActiveBooking?.status == "Pending"
                                   ? Colors.amber
-                                  : Colors.green,
+                                  : myActiveBooking?.status == "In Progress"
+                                      ? Colors.cyan
+                                      : Colors.green,
                               width: 1.2,
                             ),
                           ),
@@ -1080,10 +1624,14 @@ class _CarDetailsState extends State<CarDetails> {
                               Icon(
                                 myActiveBooking?.status == "Pending"
                                     ? Icons.hourglass_top_rounded
-                                    : Icons.check_circle_outline,
+                                    : myActiveBooking?.status == "In Progress"
+                                        ? Icons.vpn_key_outlined
+                                        : Icons.check_circle_outline,
                                 color: myActiveBooking?.status == "Pending"
                                     ? Colors.amber
-                                    : Colors.green,
+                                    : myActiveBooking?.status == "In Progress"
+                                        ? Colors.cyanAccent
+                                        : Colors.green,
                                 size: 22,
                               ),
                               const SizedBox(width: 12),
@@ -1094,11 +1642,15 @@ class _CarDetailsState extends State<CarDetails> {
                                     Text(
                                       myActiveBooking?.status == "Pending"
                                           ? "Rental Request Pending"
-                                          : "Vehicle Currently Confirmed",
+                                          : myActiveBooking?.status == "In Progress"
+                                              ? "Trip In Progress (Keys Handed Over)"
+                                              : "Vehicle Currently Confirmed",
                                       style: TextStyle(
                                         color: myActiveBooking?.status == "Pending"
                                             ? Colors.amber
-                                            : Colors.green,
+                                            : myActiveBooking?.status == "In Progress"
+                                                ? Colors.cyanAccent
+                                                : Colors.green,
                                         fontWeight: FontWeight.bold,
                                         fontSize: 14,
                                       ),
@@ -1107,7 +1659,9 @@ class _CarDetailsState extends State<CarDetails> {
                                     Text(
                                       myActiveBooking?.status == "Pending"
                                           ? "You have already sent a rental request for ${widget.carName}. If the host declines it, you can request again."
-                                          : "You currently have an active confirmed rental trip for this vehicle.",
+                                          : myActiveBooking?.status == "In Progress"
+                                              ? "Keys have been handed over. Your trip is currently active until ${myActiveBooking?.returnDate}."
+                                              : "You currently have an active confirmed rental trip for this vehicle.",
                                       style: TextStyle(
                                         color: Colors.grey.shade300,
                                         fontSize: 12,
@@ -1132,7 +1686,9 @@ class _CarDetailsState extends State<CarDetails> {
                                       content: Text(
                                         myActiveBooking?.status == "Pending"
                                             ? "Your request is already pending host response. You will be notified once reviewed."
-                                            : "You already have an active confirmed booking for this vehicle.",
+                                            : myActiveBooking?.status == "In Progress"
+                                                ? "Trip is currently in progress. Return vehicle by ${myActiveBooking?.returnDate}."
+                                                : "You already have an active confirmed booking for this vehicle.",
                                       ),
                                       backgroundColor: Colors.amber.shade900,
                                       behavior: SnackBarBehavior.floating,
@@ -1161,7 +1717,9 @@ class _CarDetailsState extends State<CarDetails> {
                             isRequestedByMe
                                 ? (myActiveBooking?.status == "Pending"
                                     ? "Request Pending Host Review"
-                                    : "Vehicle Booked By You")
+                                    : myActiveBooking?.status == "In Progress"
+                                        ? "Trip In Progress (Active)"
+                                        : "Vehicle Booked By You")
                                 : "Rent Now",
                             style: const TextStyle(
                               fontSize: 16,

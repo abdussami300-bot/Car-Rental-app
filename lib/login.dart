@@ -193,6 +193,16 @@ fontWeight: FontWeight.bold,
 ),
 ),
 ),
+OutlinedButton(onPressed: (){Navigator.pushReplacement(
+context,
+MaterialPageRoute(builder: (context)=>const HomePage(name: "Guestuser", email: "guest@explore.com",
+isGuest: true,
+),
+),
+);
+},
+    child: Text("Explore as a Guest"),
+),
 
 const SizedBox(height: 16),
 
