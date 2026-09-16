@@ -3,6 +3,7 @@ import 'theme.dart';
 import 'add_car.dart';
 import 'car details.dart';
 import 'user_data.dart';
+import 'firestore_service.dart';
 
 class MyCar extends StatefulWidget {
   final bool isEmbedded;
@@ -65,6 +66,7 @@ class _MyCarState extends State<MyCar> {
                   allCarsList.removeWhere((c) => c.id == car.id);
                 });
                 await saveCarsToLocalStorage();
+                FirestoreService.deleteCarFromFirestore(car.id);
                 Navigator.pop(dialogContext);
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
@@ -289,7 +291,10 @@ class _MyCarState extends State<MyCar> {
                                             ],
                                           ),
                                           const SizedBox(height: 6),
-                                          Row(
+                                          Wrap(
+                                            spacing: 6,
+                                            runSpacing: 4,
+                                            crossAxisAlignment: WrapCrossAlignment.center,
                                             children: [
                                               Container(
                                                 padding: const EdgeInsets.symmetric(
@@ -308,7 +313,6 @@ class _MyCarState extends State<MyCar> {
                                                   ),
                                                 ),
                                               ),
-                                              const SizedBox(width: 6),
                                               Container(
                                                 padding: const EdgeInsets.symmetric(
                                                     horizontal: 7, vertical: 2),
@@ -326,24 +330,19 @@ class _MyCarState extends State<MyCar> {
                                                   ),
                                                 ),
                                               ),
-                                              const SizedBox(width: 8),
-                                              Expanded(
-                                                child: Row(
-                                                  children: [
-                                                    const Icon(Icons.calendar_month, color: AppTheme.primary, size: 12),
-                                                    const SizedBox(width: 4),
-                                                    Expanded(
-                                                      child: Text(
-                                                        car.availabilityText,
-                                                        style: const TextStyle(
-                                                          color: Colors.white70,
-                                                          fontSize: 11,
-                                                        ),
-                                                        overflow: TextOverflow.ellipsis,
-                                                      ),
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const Icon(Icons.calendar_month, color: AppTheme.primary, size: 12),
+                                                  const SizedBox(width: 4),
+                                                  Text(
+                                                    car.availabilityText,
+                                                    style: const TextStyle(
+                                                      color: Colors.white70,
+                                                      fontSize: 11,
                                                     ),
-                                                  ],
-                                                ),
+                                                  ),
+                                                ],
                                               ),
                                             ],
                                           ),

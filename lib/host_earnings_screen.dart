@@ -256,23 +256,22 @@ class _HostEarningsScreenState extends State<HostEarningsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // METHOD SELECTOR
-                  Row(
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
                     children: ["Bank Account", "JazzCash", "EasyPaisa"].map((m) {
                       final isSel = _selectedMethod == m;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: ChoiceChip(
-                          label: Text(m),
-                          selected: isSel,
-                          selectedColor: AppTheme.primary,
-                          backgroundColor: const Color(0xFF282828),
-                          labelStyle: TextStyle(
-                            color: isSel ? Colors.white : Colors.grey,
-                            fontSize: 11,
-                            fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
-                          ),
-                          onSelected: (_) => setState(() => _selectedMethod = m),
+                      return ChoiceChip(
+                        label: Text(m),
+                        selected: isSel,
+                        selectedColor: AppTheme.primary,
+                        backgroundColor: const Color(0xFF282828),
+                        labelStyle: TextStyle(
+                          color: isSel ? Colors.white : Colors.grey,
+                          fontSize: 11,
+                          fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
                         ),
+                        onSelected: (_) => setState(() => _selectedMethod = m),
                       );
                     }).toList(),
                   ),
@@ -380,23 +379,41 @@ class _HostEarningsScreenState extends State<HostEarningsScreen> {
                     border: Border.all(color: Colors.white12),
                   ),
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(b.car.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                          const SizedBox(height: 2),
-                          Text("Renter: ${b.customerName} • ${b.days} Days", style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                          Text("Payment: ${b.paymentMethod}", style: TextStyle(color: Colors.grey[500], fontSize: 11)),
-                        ],
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              b.car.name,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              "Renter: ${b.customerName} • ${b.days} Days",
+                              style: const TextStyle(color: Colors.grey, fontSize: 12),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(
+                              "Payment: ${b.paymentMethod}",
+                              style: TextStyle(color: Colors.grey[500], fontSize: 11),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
                       ),
+                      const SizedBox(width: 8),
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
                           Text("+PKR $net", style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 15)),
                           const SizedBox(height: 2),
-                          const Text("Net (10% fee deducted)", style: TextStyle(color: Colors.grey, fontSize: 10)),
+                          const Text("Net (10% fee)", style: TextStyle(color: Colors.grey, fontSize: 10)),
                         ],
                       ),
                     ],
@@ -411,7 +428,7 @@ class _HostEarningsScreenState extends State<HostEarningsScreen> {
 
   Widget _buildMetricCard(String label, String value, IconData icon, Color color) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
       decoration: BoxDecoration(
         color: const Color(0xFF1E1E1E),
         borderRadius: BorderRadius.circular(14),
@@ -422,13 +439,20 @@ class _HostEarningsScreenState extends State<HostEarningsScreen> {
         children: [
           Icon(icon, color: color, size: 20),
           const SizedBox(height: 8),
-          Text(label, style: const TextStyle(color: Colors.grey, fontSize: 10)),
-          const SizedBox(height: 2),
           Text(
-            value,
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+            label,
+            style: const TextStyle(color: Colors.grey, fontSize: 10),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 2),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+            ),
           ),
         ],
       ),

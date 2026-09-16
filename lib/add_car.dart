@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'car_photos_screen.dart';
 import 'theme.dart';
 import 'user_data.dart';
+import 'firestore_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -430,6 +431,7 @@ class _AddCarState extends State<AddCar> {
       if (index != -1) {
         allCarsList[index] = updatedCar;
         await saveCarsToLocalStorage();
+        FirestoreService.saveCarToFirestore(updatedCar);
       }
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -464,9 +466,10 @@ class _AddCarState extends State<AddCar> {
       availableTo: _availableTo != null ? _formatDate(_availableTo!) : "Always Open",
     );
 
-    // Add to shared state & persist locally
+    // Add to shared state & persist locally + Cloud Firestore
     allCarsList.insert(0, newCar);
     await saveCarsToLocalStorage();
+    FirestoreService.saveCarToFirestore(newCar);
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(

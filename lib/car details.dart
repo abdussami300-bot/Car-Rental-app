@@ -5,6 +5,7 @@ import 'checkout_screen.dart';
 import 'verification_screen.dart';
 import 'chat_screen.dart';
 import 'review_screen.dart';
+import 'login.dart';
 
 class CarDetails extends StatefulWidget {
   final String carName;
@@ -23,6 +24,7 @@ class CarDetails extends StatefulWidget {
   final Map<String, String>? photos;
   final String currentUserEmail;
   final String currentUserName;
+  final bool isGuest;
 
   const CarDetails({
     super.key,
@@ -42,6 +44,7 @@ class CarDetails extends StatefulWidget {
     this.photos,
     this.currentUserEmail = "",
     this.currentUserName = "",
+    this.isGuest = false,
   });
 
   @override
@@ -130,7 +133,53 @@ class _CarDetailsState extends State<CarDetails> {
     return int.tryParse(digitsOnly) ?? 5000;
   }
 
+  void _showGuestLoginPrompt(String action) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.lock_outline, color: AppTheme.primary, size: 24),
+            SizedBox(width: 8),
+            Text("Login Required", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Text(
+          "You are exploring as a guest. Please login or create an account to $action.",
+          style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => LoginPage()),
+              );
+            },
+            child: const Text("Login Now"),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showRentModal() {
+    if (widget.isGuest) {
+      _showGuestLoginPrompt("rent this car");
+      return;
+    }
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -274,14 +323,19 @@ class _CarDetailsState extends State<CarDetails> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        widget.carName,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+                      Expanded(
+                        child: Text(
+                          widget.carName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
+                      const SizedBox(width: 8),
                       Text(
                         "Rs. $_dailyRate/day",
                         style: const TextStyle(
@@ -698,7 +752,7 @@ class _CarDetailsState extends State<CarDetails> {
                         // Check Identity & Driving License Verification
                         if (!currentUserVerification.isVerified) {
                           Navigator.pop(modalContext);
-                          final wantVerify = await showDialog<bool>(
+                          showDialog(
                             context: context,
                             builder: (ctx) => AlertDialog(
                               backgroundColor: const Color(0xFF1E1E1E),
@@ -716,7 +770,7 @@ class _CarDetailsState extends State<CarDetails> {
                               ),
                               actions: [
                                 TextButton(
-                                  onPressed: () => Navigator.pop(ctx, false),
+                                  onPressed: () => Navigator.pop(ctx),
                                   child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
                                 ),
                                 ElevatedButton(
@@ -725,19 +779,18 @@ class _CarDetailsState extends State<CarDetails> {
                                     foregroundColor: Colors.white,
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                                   ),
-                                  onPressed: () => Navigator.pop(ctx, true),
+                                  onPressed: () {
+                                    Navigator.pop(ctx);
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(builder: (context) => const VerificationScreen()),
+                                    );
+                                  },
                                   child: const Text("Verify Now"),
                                 ),
                               ],
                             ),
                           );
-
-                          if (wantVerify == true && mounted) {
-                            await Navigator.push(
-                              context,
-                              MaterialPageRoute(builder: (context) => const VerificationScreen()),
-                            );
-                          }
                           return;
                         }
 
@@ -771,11 +824,14 @@ class _CarDetailsState extends State<CarDetails> {
                         children: [
                           Icon(isRangeAvailable ? Icons.payment : Icons.event_busy, size: 18),
                           const SizedBox(width: 8),
-                          Text(
-                            isRangeAvailable ? "Proceed to Checkout" : "Dates Unavailable (Choose New Dates)",
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              isRangeAvailable ? "Proceed to Checkout" : "Dates Unavailable (Choose New Dates)",
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
                         ],
@@ -1056,16 +1112,19 @@ class _CarDetailsState extends State<CarDetails> {
 
               // ---------- 2. NAME & PRICE ----------
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    widget.carName,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
+                  Expanded(
+                    child: Text(
+                      widget.carName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
+                  const SizedBox(width: 10),
                   Text(
                     "Rs. ${widget.price}",
                     style: const TextStyle(
@@ -1088,9 +1147,12 @@ class _CarDetailsState extends State<CarDetails> {
                     style: const TextStyle(color: Colors.white, fontSize: 16),
                   ),
                   const SizedBox(width: 8),
-                  const Text(
-                    "(Verified Host • 140+ Trips)",
-                    style: TextStyle(color: Colors.grey, fontSize: 13),
+                  const Expanded(
+                    child: Text(
+                      "(Verified Host • 140+ Trips)",
+                      style: TextStyle(color: Colors.grey, fontSize: 13),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ],
               ),
@@ -1106,16 +1168,19 @@ class _CarDetailsState extends State<CarDetails> {
                   border: Border.all(color: AppTheme.primary.withOpacity(0.4)),
                 ),
                 child: Row(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
                     const Icon(Icons.calendar_month, color: AppTheme.primary, size: 16),
                     const SizedBox(width: 8),
-                    Text(
-                      "Available: ${widget.availableFrom} - ${widget.availableTo}",
-                      style: const TextStyle(
-                        color: AppTheme.primaryLight,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
+                    Expanded(
+                      child: Text(
+                        "Available: ${widget.availableFrom} - ${widget.availableTo}",
+                        style: const TextStyle(
+                          color: AppTheme.primaryLight,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
@@ -1132,7 +1197,6 @@ class _CarDetailsState extends State<CarDetails> {
                   border: Border.all(color: Colors.teal.withOpacity(0.4)),
                 ),
                 child: Row(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
                       widget.rentalMode == "With Driver"
@@ -1142,14 +1206,18 @@ class _CarDetailsState extends State<CarDetails> {
                       size: 16,
                     ),
                     const SizedBox(width: 8),
-                    Text(
-                      widget.rentalMode == "Both Available"
-                          ? "Rental Mode: Self-Drive & With Driver (Both Available)"
-                          : "Rental Mode: ${widget.rentalMode}",
-                      style: const TextStyle(
-                        color: Colors.tealAccent,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
+                    Expanded(
+                      child: Text(
+                        widget.rentalMode == "Both Available"
+                            ? "Rental Mode: Self-Drive & With Driver"
+                            : "Rental Mode: ${widget.rentalMode}",
+                        style: const TextStyle(
+                          color: Colors.tealAccent,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
@@ -1173,7 +1241,6 @@ class _CarDetailsState extends State<CarDetails> {
                       border: Border.all(color: color.withOpacity(0.4)),
                     ),
                     child: Row(
-                      mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
                           isAvail
@@ -1183,12 +1250,16 @@ class _CarDetailsState extends State<CarDetails> {
                           size: 16,
                         ),
                         const SizedBox(width: 8),
-                        Text(
-                          "Calendar Status: $summary",
-                          style: TextStyle(
-                            color: color,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
+                        Expanded(
+                          child: Text(
+                            "Calendar Status: $summary",
+                            style: TextStyle(
+                              color: color,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],
@@ -1216,84 +1287,108 @@ class _CarDetailsState extends State<CarDetails> {
                   // Gear / Transmission Field
                   Expanded(
                     child: Container(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
                       decoration: BoxDecoration(
                         color: const Color(0xFF1E1E1E),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Column(
                         children: [
-                          const Icon(Icons.settings, color: AppTheme.primary, size: 24),
+                          const Icon(Icons.settings, color: AppTheme.primary, size: 22),
                           const SizedBox(height: 6),
-                          const Text("Gear", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                          const Text("Gear", style: TextStyle(color: Colors.grey, fontSize: 11)),
                           const SizedBox(height: 4),
-                          Text(widget.transmission, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              widget.transmission,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                          ),
                         ],
                       ),
                     ),
                   ),
 
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 8),
 
                   // Seats Field
                   Expanded(
                     child: Container(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
                       decoration: BoxDecoration(
                         color: const Color(0xFF1E1E1E),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Column(
                         children: [
-                          const Icon(Icons.people, color: AppTheme.primary, size: 24),
+                          const Icon(Icons.people, color: AppTheme.primary, size: 22),
                           const SizedBox(height: 6),
-                          const Text("Seats", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                          const Text("Seats", style: TextStyle(color: Colors.grey, fontSize: 11)),
                           const SizedBox(height: 4),
-                          Text(widget.seats, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              widget.seats,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                          ),
                         ],
                       ),
                     ),
                   ),
 
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 8),
 
                   // Fuel Field
                   Expanded(
                     child: Container(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
                       decoration: BoxDecoration(
                         color: const Color(0xFF1E1E1E),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Column(
                         children: [
-                          const Icon(Icons.local_gas_station, color: AppTheme.primary, size: 24),
+                          const Icon(Icons.local_gas_station, color: AppTheme.primary, size: 22),
                           const SizedBox(height: 6),
-                          const Text("Fuel", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                          const Text("Fuel", style: TextStyle(color: Colors.grey, fontSize: 11)),
                           const SizedBox(height: 4),
-                          Text(widget.fuelType, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              widget.fuelType,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                          ),
                         ],
                       ),
                     ),
                   ),
 
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 8),
 
                   // Speed Field
                   Expanded(
                     child: Container(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
                       decoration: BoxDecoration(
                         color: const Color(0xFF1E1E1E),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Column(
                         children: [
-                          const Icon(Icons.speed, color: AppTheme.primary, size: 24),
+                          const Icon(Icons.speed, color: AppTheme.primary, size: 22),
                           const SizedBox(height: 6),
-                          const Text("Speed", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                          const Text("Speed", style: TextStyle(color: Colors.grey, fontSize: 11)),
                           const SizedBox(height: 4),
-                          Text(widget.speed, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              widget.speed,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -1337,19 +1432,22 @@ class _CarDetailsState extends State<CarDetails> {
                   children: [
                     const Icon(Icons.location_on, color: AppTheme.primary, size: 28),
                     const SizedBox(width: 12),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          "Pick-Up Location",
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          widget.location,
-                          style: const TextStyle(color: Colors.grey, fontSize: 12),
-                        ),
-                      ],
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            "Pick-Up Location",
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            widget.location,
+                            style: const TextStyle(color: Colors.grey, fontSize: 12),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -1391,6 +1489,10 @@ class _CarDetailsState extends State<CarDetails> {
                     ),
                     OutlinedButton.icon(
                       onPressed: () {
+                        if (widget.isGuest) {
+                          _showGuestLoginPrompt("chat with the host");
+                          return;
+                        }
                         final userEmail = widget.currentUserEmail.isNotEmpty ? widget.currentUserEmail : email;
                         Navigator.push(
                           context,
@@ -1432,38 +1534,54 @@ class _CarDetailsState extends State<CarDetails> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Row(
-                            children: [
-                              const Text(
-                                "Reviews & Ratings",
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: Colors.amber.withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.star, color: Colors.amber, size: 14),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      "${widget.rating} (${reviews.length})",
-                                      style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12),
+                          Expanded(
+                            child: Row(
+                              children: [
+                                const Flexible(
+                                  child: Text(
+                                    "Reviews & Ratings",
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
                                     ),
-                                  ],
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
-                              ),
-                            ],
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.amber.withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.star, color: Colors.amber, size: 13),
+                                      const SizedBox(width: 3),
+                                      Text(
+                                        "${widget.rating} (${reviews.length})",
+                                        style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 11),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
+                          const SizedBox(width: 6),
                           TextButton.icon(
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
                             onPressed: () async {
+                              if (widget.isGuest) {
+                                _showGuestLoginPrompt("write a review");
+                                return;
+                              }
                               await Navigator.push(
                                 context,
                                 MaterialPageRoute(
@@ -1477,7 +1595,7 @@ class _CarDetailsState extends State<CarDetails> {
                               );
                               setState(() {});
                             },
-                            icon: const Icon(Icons.rate_review_outlined, size: 15, color: AppTheme.primaryLight),
+                            icon: const Icon(Icons.rate_review_outlined, size: 14, color: AppTheme.primaryLight),
                             label: const Text("Write Review", style: TextStyle(color: AppTheme.primaryLight, fontSize: 12)),
                           ),
                         ],
@@ -1518,33 +1636,40 @@ class _CarDetailsState extends State<CarDetails> {
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
-                                  Row(
-                                    children: [
-                                      CircleAvatar(
-                                        radius: 14,
-                                        backgroundColor: AppTheme.primary.withOpacity(0.2),
-                                        child: Text(
-                                          rev.userName.isNotEmpty ? rev.userName[0].toUpperCase() : "U",
-                                          style: const TextStyle(color: AppTheme.primaryLight, fontWeight: FontWeight.bold, fontSize: 12),
+                                  Expanded(
+                                    child: Row(
+                                      children: [
+                                        CircleAvatar(
+                                          radius: 14,
+                                          backgroundColor: AppTheme.primary.withOpacity(0.2),
+                                          child: Text(
+                                            rev.userName.isNotEmpty ? rev.userName[0].toUpperCase() : "U",
+                                            style: const TextStyle(color: AppTheme.primaryLight, fontWeight: FontWeight.bold, fontSize: 12),
+                                          ),
                                         ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        rev.userName,
-                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                                        decoration: BoxDecoration(
-                                          color: Colors.green.withOpacity(0.15),
-                                          borderRadius: BorderRadius.circular(4),
+                                        const SizedBox(width: 8),
+                                        Flexible(
+                                          child: Text(
+                                            rev.userName,
+                                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
                                         ),
-                                        child: const Text("Verified", style: TextStyle(color: Colors.greenAccent, fontSize: 9, fontWeight: FontWeight.bold)),
-                                      ),
-                                    ],
+                                        const SizedBox(width: 6),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                          decoration: BoxDecoration(
+                                            color: Colors.green.withOpacity(0.15),
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                          child: const Text("Verified", style: TextStyle(color: Colors.greenAccent, fontSize: 9, fontWeight: FontWeight.bold)),
+                                        ),
+                                      ],
+                                    ),
                                   ),
+                                  const SizedBox(width: 6),
                                   Row(
+                                    mainAxisSize: MainAxisSize.min,
                                     children: [
                                       const Icon(Icons.star, color: Colors.amber, size: 14),
                                       const SizedBox(width: 3),
@@ -1713,17 +1838,20 @@ class _CarDetailsState extends State<CarDetails> {
                             isRequestedByMe ? Icons.lock_outline : Icons.directions_car,
                             size: 18,
                           ),
-                          label: Text(
-                            isRequestedByMe
-                                ? (myActiveBooking?.status == "Pending"
-                                    ? "Request Pending Host Review"
-                                    : myActiveBooking?.status == "In Progress"
-                                        ? "Trip In Progress (Active)"
-                                        : "Vehicle Booked By You")
-                                : "Rent Now",
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
+                          label: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              isRequestedByMe
+                                  ? (myActiveBooking?.status == "Pending"
+                                      ? "Request Pending Host Review"
+                                      : myActiveBooking?.status == "In Progress"
+                                          ? "Trip In Progress (Active)"
+                                          : "Vehicle Booked By You")
+                                  : "Rent Now",
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
                         ),

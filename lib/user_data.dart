@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'firestore_service.dart';
 
 // ================= USER SESSION DATA & PROFILES =================
 String name = "Sami";
@@ -563,7 +564,7 @@ final List<CarItem> defaultInitialCars = [
     brand: "Mercedes",
     price: "5000/day",
     rating: 4.8,
-    image: "images/car.webp",
+    image: "https://images.unsplash.com/photo-1618843479313-40f8afb4b4d8?auto=format&fit=crop&w=600&q=80",
     seats: "5 Seats",
     transmission: "Automatic",
     fuelType: "Petrol",
@@ -577,7 +578,7 @@ final List<CarItem> defaultInitialCars = [
     brand: "BMW",
     price: "6000/day",
     rating: 4.7,
-    image: "images/car.webp",
+    image: "https://images.unsplash.com/photo-1580273916550-e323be2ae537?auto=format&fit=crop&w=600&q=80",
     seats: "4 Seats",
     transmission: "Automatic",
     fuelType: "Petrol",
@@ -591,7 +592,7 @@ final List<CarItem> defaultInitialCars = [
     brand: "Toyota",
     price: "4500/day",
     rating: 4.6,
-    image: "images/car.webp",
+    image: "https://images.unsplash.com/photo-1594502184342-2e12f877aa73?auto=format&fit=crop&w=600&q=80",
     seats: "7 Seats",
     transmission: "Automatic",
     fuelType: "Diesel",
@@ -605,7 +606,7 @@ final List<CarItem> defaultInitialCars = [
     brand: "Audi",
     price: "7000/day",
     rating: 4.9,
-    image: "images/car.webp",
+    image: "https://images.unsplash.com/photo-1603584173870-7f23fdae1b7a?auto=format&fit=crop&w=600&q=80",
     seats: "4 Seats",
     transmission: "Automatic",
     fuelType: "Petrol",
@@ -619,7 +620,7 @@ final List<CarItem> defaultInitialCars = [
     brand: "Honda",
     price: "4000/day",
     rating: 4.9,
-    image: "images/car.webp",
+    image: "https://images.unsplash.com/photo-1606664515524-ed2f786a0bd6?auto=format&fit=crop&w=600&q=80",
     seats: "5 Seats",
     transmission: "Automatic",
     fuelType: "Petrol",
@@ -636,7 +637,7 @@ final List<CarItem> defaultInitialCars = [
     brand: "Hyundai",
     price: "5500/day",
     rating: 4.8,
-    image: "images/car.webp",
+    image: "https://images.unsplash.com/photo-1563720223185-11003d516935?auto=format&fit=crop&w=600&q=80",
     seats: "5 Seats",
     transmission: "Automatic",
     fuelType: "Petrol",
@@ -650,7 +651,7 @@ final List<CarItem> defaultInitialCars = [
     brand: "Kia",
     price: "5000/day",
     rating: 4.7,
-    image: "images/car.webp",
+    image: "https://images.unsplash.com/photo-1583121274602-3e2820c69888?auto=format&fit=crop&w=600&q=80",
     seats: "5 Seats",
     transmission: "Automatic",
     fuelType: "Petrol",
@@ -830,7 +831,7 @@ BookingItem? getActiveBookingForCar(String carName) {
 }
 
 // ================= LOCAL PERSISTENCE STORAGE (LAPTOP / DEVICE) =================
-const String _kCarsStorageKey = "saved_cars_list_v2";
+const String _kCarsStorageKey = "saved_cars_list_v3";
 const String _kUserCarsDedicatedKey = "saved_user_custom_cars_dedicated_v1";
 const String _kBookingsStorageKey = "saved_bookings_list_v2";
 
@@ -857,6 +858,13 @@ Future<bool> saveCarsToLocalStorage() async {
     try {
       final file = _getUserCarsBackupFile();
       await file.writeAsString(userCarsEncoded, flush: true);
+    } catch (_) {}
+
+    // 4. Background cloud sync to Cloud Firestore
+    try {
+      for (final uc in allCarsList.where((c) => c.isUserCar)) {
+        FirestoreService.saveCarToFirestore(uc);
+      }
     } catch (_) {}
 
     debugPrint("🚗 saveCarsToLocalStorage: success=$success, total: ${allCarsList.length} cars (${userCarsOnly.length} user-listed)");
@@ -948,6 +956,13 @@ Future<bool> saveBookingsToLocalStorage() async {
     final List<Map<String, dynamic>> jsonList = userBookingsList.map((b) => b.toJson()).toList();
     final String encoded = jsonEncode(jsonList);
     final success = await prefs.setString(_kBookingsStorageKey, encoded);
+    // 2. Background cloud sync to Cloud Firestore
+    try {
+      for (final b in userBookingsList) {
+        FirestoreService.saveBookingToFirestore(b);
+      }
+    } catch (_) {}
+
     debugPrint("📋 saveBookingsToLocalStorage: success=$success, total bookings: ${userBookingsList.length}");
     return success;
   } catch (e) {
@@ -1554,6 +1569,7 @@ List<ReviewItem> getReviewsForCar(String carName, {String? carId}) {
 Future<void> addCarReview(ReviewItem review) async {
   carReviewsList.insert(0, review);
   await saveReviewsToLocalStorage();
+  FirestoreService.saveReviewToFirestore(review);
 }
 
 Future<void> saveReviewsToLocalStorage() async {

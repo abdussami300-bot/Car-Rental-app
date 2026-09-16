@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'theme.dart';
 import 'user_data.dart';
+import 'firestore_service.dart';
 
 class ChatScreen extends StatefulWidget {
   final String bookingId;
@@ -61,6 +62,7 @@ class _ChatScreenState extends State<ChatScreen> {
     });
 
     await saveChatMessagesToLocalStorage();
+    FirestoreService.saveChatMessageToFirestore(newMsg);
 
     // Scroll to bottom
     Future.delayed(const Duration(milliseconds: 100), () {
@@ -83,13 +85,15 @@ class _ChatScreenState extends State<ChatScreen> {
           carName: widget.carName,
           senderEmail: "host@example.com",
           senderName: widget.otherPartyName,
-          text: "Walaikum as-salam! I have received your query regarding ${widget.carName}. Please wait a moment while I check and confirm this for you.",          timestamp: DateTime.now(),
+          text: "Walaikum as-salam! I have received your query regarding ${widget.carName}. Please wait a moment while I check and confirm this for you.",
+          timestamp: DateTime.now(),
           isFromHost: true,
         );
         setState(() {
           chatMessagesList.add(reply);
         });
         await saveChatMessagesToLocalStorage();
+        FirestoreService.saveChatMessageToFirestore(reply);
 
         if (_scrollController.hasClients) {
           _scrollController.animateTo(
@@ -168,49 +172,63 @@ class _ChatScreenState extends State<ChatScreen> {
 
           // MESSAGES LIST
           Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.all(16),
-              itemCount: messages.length,
-              itemBuilder: (context, index) {
-                final msg = messages[index];
-                final isMe = widget.isHostViewing ? msg.isFromHost : !msg.isFromHost;
+            child: StreamBuilder<List<ChatMessage>>(
+              stream: FirestoreService.streamMessagesForBooking(widget.bookingId, widget.carName),
+              builder: (context, snapshot) {
+                final displayMessages = (snapshot.hasData && snapshot.data!.isNotEmpty)
+                    ? snapshot.data!
+                    : getMessagesForBooking(widget.bookingId, widget.carName);
 
-                return Align(
-                  alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: isMe ? AppTheme.primary : const Color(0xFF222222),
-                      borderRadius: BorderRadius.only(
-                        topLeft: const Radius.circular(14),
-                        topRight: const Radius.circular(14),
-                        bottomLeft: isMe ? const Radius.circular(14) : Radius.zero,
-                        bottomRight: isMe ? Radius.zero : const Radius.circular(14),
-                      ),
-                      border: isMe ? null : Border.all(color: Colors.white12),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          msg.text,
-                          style: const TextStyle(color: Colors.white, fontSize: 14),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          "${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}",
-                          style: TextStyle(
-                            color: isMe ? Colors.white70 : Colors.grey,
-                            fontSize: 10,
+                if (displayMessages.isEmpty) {
+                  return const Center(
+                    child: Text("No messages yet. Say hello!", style: TextStyle(color: Colors.grey)),
+                  );
+                }
 
+                return ListView.builder(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.all(16),
+                  itemCount: displayMessages.length,
+                  itemBuilder: (context, index) {
+                    final msg = displayMessages[index];
+                    final isMe = widget.isHostViewing ? msg.isFromHost : !msg.isFromHost;
+
+                    return Align(
+                      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: isMe ? AppTheme.primary : const Color(0xFF222222),
+                          borderRadius: BorderRadius.only(
+                            topLeft: const Radius.circular(14),
+                            topRight: const Radius.circular(14),
+                            bottomLeft: isMe ? const Radius.circular(14) : Radius.zero,
+                            bottomRight: isMe ? Radius.zero : const Radius.circular(14),
                           ),
+                          border: isMe ? null : Border.all(color: Colors.white12),
                         ),
-                      ],
-                    ),
-                  ),
+                        child: Column(
+                          crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              msg.text,
+                              style: const TextStyle(color: Colors.white, fontSize: 14),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              "${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}",
+                              style: TextStyle(
+                                color: isMe ? Colors.white70 : Colors.grey,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 );
               },
             ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'theme.dart';
 import 'user_data.dart';
+import 'firestore_service.dart';
 
 class CheckoutScreen extends StatefulWidget {
   final CarItem car;
@@ -70,6 +71,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     userBookingsList.insert(0, newBooking);
     await saveBookingsToLocalStorage();
+    FirestoreService.saveBookingToFirestore(newBooking);
 
     setState(() => _isProcessing = false);
 

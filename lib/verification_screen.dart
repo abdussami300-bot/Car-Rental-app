@@ -1,6 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'theme.dart';
 import 'user_data.dart';
+import 'auth_service.dart';
 
 class VerificationScreen extends StatefulWidget {
   const VerificationScreen({super.key});
@@ -15,9 +18,10 @@ class _VerificationScreenState extends State<VerificationScreen> {
   late TextEditingController _licenseController;
   late TextEditingController _expiryController;
 
-  bool _cnicFrontUploaded = true;
-  bool _cnicBackUploaded = true;
-  bool _licenseUploaded = true;
+  File? _cnicFrontFile;
+  File? _cnicBackFile;
+  File? _licenseFile;
+  final ImagePicker _picker = ImagePicker();
   bool _isSaving = false;
 
   @override
@@ -26,9 +30,19 @@ class _VerificationScreenState extends State<VerificationScreen> {
     _cnicController = TextEditingController(text: currentUserVerification.cnicNumber);
     _licenseController = TextEditingController(text: currentUserVerification.licenseNumber);
     _expiryController = TextEditingController(text: currentUserVerification.licenseExpiry);
-    _cnicFrontUploaded = currentUserVerification.cnicNumber.isNotEmpty;
-    _cnicBackUploaded = currentUserVerification.cnicNumber.isNotEmpty;
-    _licenseUploaded = currentUserVerification.licenseNumber.isNotEmpty;
+
+    if (currentUserVerification.cnicFrontPath.isNotEmpty &&
+        File(currentUserVerification.cnicFrontPath).existsSync()) {
+      _cnicFrontFile = File(currentUserVerification.cnicFrontPath);
+    }
+    if (currentUserVerification.cnicBackPath.isNotEmpty &&
+        File(currentUserVerification.cnicBackPath).existsSync()) {
+      _cnicBackFile = File(currentUserVerification.cnicBackPath);
+    }
+    if (currentUserVerification.licenseImagePath.isNotEmpty &&
+        File(currentUserVerification.licenseImagePath).existsSync()) {
+      _licenseFile = File(currentUserVerification.licenseImagePath);
+    }
   }
 
   @override
@@ -39,22 +53,95 @@ class _VerificationScreenState extends State<VerificationScreen> {
     super.dispose();
   }
 
+  Future<void> _pickImage(String type) async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Wrap(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined, color: AppTheme.primaryLight),
+                title: const Text("Choose from Gallery", style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+              ListTile(
+                leading: const Icon(Icons.camera_alt_outlined, color: AppTheme.primaryLight),
+                title: const Text("Take Photo with Camera", style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (source == null) return;
+
+    try {
+      final picked = await _picker.pickImage(
+        source: source,
+        imageQuality: 85,
+      );
+      if (picked != null) {
+        setState(() {
+          if (type == 'cnic_front') _cnicFrontFile = File(picked.path);
+          if (type == 'cnic_back') _cnicBackFile = File(picked.path);
+          if (type == 'license') _licenseFile = File(picked.path);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to pick image: $e")),
+        );
+      }
+    }
+  }
+
   Future<void> _submitVerification() async {
     if (!_formKey.currentState!.validate()) return;
+
+    if (_cnicFrontFile == null || _cnicBackFile == null || _licenseFile == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("⚠️ Please upload photos of CNIC Front, Back, and Driving License"),
+          backgroundColor: Colors.redAccent,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
     setState(() => _isSaving = true);
 
     currentUserVerification = VerificationData(
       cnicNumber: _cnicController.text.trim(),
-      cnicFrontPath: "assets/mock_cnic_front.jpg",
-      cnicBackPath: "assets/mock_cnic_back.jpg",
+      cnicFrontPath: _cnicFrontFile?.path ?? "",
+      cnicBackPath: _cnicBackFile?.path ?? "",
       licenseNumber: _licenseController.text.trim(),
       licenseExpiry: _expiryController.text.trim(),
-      licenseImagePath: "assets/mock_license.jpg",
+      licenseImagePath: _licenseFile?.path ?? "",
       status: "verified",
       verifiedAt: DateTime.now(),
     );
 
     await saveVerificationToLocalStorage();
+
+    // Sync verification to Cloud Firestore user profile
+    try {
+      await AuthService().updateUserVerification(
+        cnic: _cnicController.text.trim(),
+        license: _licenseController.text.trim(),
+        expiry: _expiryController.text.trim(),
+      );
+    } catch (_) {}
+
     setState(() => _isSaving = false);
 
     if (mounted) {
@@ -178,26 +265,16 @@ class _VerificationScreenState extends State<VerificationScreen> {
                   Expanded(
                     child: _buildUploadBox(
                       title: "CNIC Front",
-                      isUploaded: _cnicFrontUploaded,
-                      onTap: () {
-                        setState(() => _cnicFrontUploaded = !_cnicFrontUploaded);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text(_cnicFrontUploaded ? "CNIC Front attached" : "CNIC Front removed")),
-                        );
-                      },
+                      file: _cnicFrontFile,
+                      onTap: () => _pickImage('cnic_front'),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: _buildUploadBox(
                       title: "CNIC Back",
-                      isUploaded: _cnicBackUploaded,
-                      onTap: () {
-                        setState(() => _cnicBackUploaded = !_cnicBackUploaded);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text(_cnicBackUploaded ? "CNIC Back attached" : "CNIC Back removed")),
-                        );
-                      },
+                      file: _cnicBackFile,
+                      onTap: () => _pickImage('cnic_back'),
                     ),
                   ),
                 ],
@@ -246,13 +323,8 @@ class _VerificationScreenState extends State<VerificationScreen> {
               const SizedBox(height: 12),
               _buildUploadBox(
                 title: "Driving License Photo (Original Card)",
-                isUploaded: _licenseUploaded,
-                onTap: () {
-                  setState(() => _licenseUploaded = !_licenseUploaded);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(_licenseUploaded ? "Driving License attached" : "Driving License removed")),
-                  );
-                },
+                file: _licenseFile,
+                onTap: () => _pickImage('license'),
               ),
               const SizedBox(height: 32),
 
@@ -285,14 +357,15 @@ class _VerificationScreenState extends State<VerificationScreen> {
 
   Widget _buildUploadBox({
     required String title,
-    required bool isUploaded,
+    required File? file,
     required VoidCallback onTap,
   }) {
+    final isUploaded = file != null;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Container(
-        height: 100,
+        height: 110,
         decoration: BoxDecoration(
           color: const Color(0xFF1E1E1E),
           borderRadius: BorderRadius.circular(12),
@@ -301,31 +374,91 @@ class _VerificationScreenState extends State<VerificationScreen> {
             width: isUploaded ? 1.5 : 1,
           ),
         ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              isUploaded ? Icons.check_circle : Icons.add_a_photo_outlined,
-              color: isUploaded ? Colors.greenAccent : AppTheme.primary,
-              size: 26,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: isUploaded ? Colors.greenAccent : Colors.white70,
-                fontSize: 12,
-                fontWeight: isUploaded ? FontWeight.bold : FontWeight.normal,
+        child: isUploaded
+            ? Stack(
+                fit: StackFit.expand,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(11),
+                    child: Image.file(file, fit: BoxFit.cover),
+                  ),
+                  Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(11),
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.black.withOpacity(0.15),
+                          Colors.black.withOpacity(0.75),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Colors.green,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.check, size: 14, color: Colors.white),
+                    ),
+                  ),
+                  Positioned(
+                    bottom: 8,
+                    left: 8,
+                    right: 8,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          title,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        const Text(
+                          "Tap to change",
+                          style: TextStyle(color: Colors.greenAccent, fontSize: 10),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              )
+            : Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.add_a_photo_outlined,
+                    color: AppTheme.primary,
+                    size: 26,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    "Tap to upload",
+                    style: TextStyle(color: Colors.grey[500], fontSize: 10),
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              isUploaded ? "Uploaded (Tap to change)" : "Tap to upload",
-              style: TextStyle(color: Colors.grey[500], fontSize: 10),
-            ),
-          ],
-        ),
       ),
     );
   }

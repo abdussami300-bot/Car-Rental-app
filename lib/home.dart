@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'theme.dart';
 import 'car details.dart';
 import 'my_car.dart';
@@ -11,6 +12,7 @@ import 'verification_screen.dart';
 import 'favorites_screen.dart';
 import 'booking_details_screen.dart';
 import 'host_earnings_screen.dart';
+import 'auth_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,6 +28,7 @@ class MyApp extends StatelessWidget {
     super.key,
     this.email = "",
     this.name = "",
+    this.isGuest = false,
   });
 
   @override
@@ -35,6 +38,7 @@ class MyApp extends StatelessWidget {
       home: HomePage(
         name: name,
         email: email,
+        isGuest: isGuest,
       ),
     );
   }
@@ -64,6 +68,8 @@ class _HomePageState extends State<HomePage> {
   bool _isOwnerMode = false;
   DateTime? _pickupDate;
   DateTime? _returnDate;
+  DateTime? _lastBackPressTime;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   String get _currentUserEmail => widget.isGuest
       ? "guest@explore.com"
@@ -434,10 +440,292 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Widget _buildPakWheelsCarCard(CarItem car) {
+    final summary = getCarAvailabilitySummary(car);
+    final isAvail = summary == "Available Now";
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E1E1E),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          onTap: () => _navigateToCarDetails(car),
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 1. CAR IMAGE (Wide aspect ratio with photos badge)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Stack(
+                    children: [
+                      _buildCarImage(
+                        car.image,
+                        width: 120,
+                        height: 96,
+                        fit: BoxFit.cover,
+                      ),
+                      Positioned(
+                        left: 6,
+                        bottom: 6,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.75),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.camera_alt, color: Colors.white, size: 10),
+                              SizedBox(width: 3),
+                              Text(
+                                "Photos",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+
+                // 2. DETAILS COLUMN
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Car Name + Favorite Heart Icon
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              car.name,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          GestureDetector(
+                            onTap: () async {
+                              if (!_requireLogin(action: "save cars to your favorites")) return;
+                              await toggleFavoriteCar(car.id);
+                              setState(() {});
+                            },
+                            child: Icon(
+                              isCarFavorite(car.id) ? Icons.favorite : Icons.favorite_border,
+                              color: isCarFavorite(car.id) ? Colors.redAccent : Colors.grey,
+                              size: 20,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+
+                      // Bold Price
+                      Text(
+                        car.price.toLowerCase().contains("day")
+                            ? "PKR ${car.price.replaceAll(RegExp(r'[a-zA-Z./\s]'), '')} / day"
+                            : "PKR ${car.price} / day",
+                        style: const TextStyle(
+                          color: AppTheme.primaryLight,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+
+                      // Specs Row 1: Seats & Transmission
+                      Row(
+                        children: [
+                          const Icon(Icons.airline_seat_recline_normal, color: Colors.grey, size: 12),
+                          const SizedBox(width: 3),
+                          Text(car.seats, style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.settings_outlined, color: Colors.grey, size: 12),
+                          const SizedBox(width: 3),
+                          Expanded(
+                            child: Text(
+                              car.transmission,
+                              style: const TextStyle(color: Colors.grey, fontSize: 11),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+
+                      // Specs Row 2: Fuel & Location
+                      Row(
+                        children: [
+                          const Icon(Icons.local_gas_station_outlined, color: Colors.grey, size: 12),
+                          const SizedBox(width: 3),
+                          Text(car.fuelType, style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.location_on_outlined, color: AppTheme.primary, size: 12),
+                          const SizedBox(width: 3),
+                          Expanded(
+                            child: Text(
+                              car.location,
+                              style: const TextStyle(color: Colors.grey, fontSize: 11),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+
+                      // Badges: Availability, Rating, Rental Mode
+                      Wrap(
+                        spacing: 5,
+                        runSpacing: 4,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: (isAvail ? Colors.green : Colors.amber).withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              isAvail ? "● Available" : summary,
+                              style: TextStyle(
+                                color: isAvail ? Colors.greenAccent : Colors.amberAccent,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.star, color: Colors.amber, size: 11),
+                                const SizedBox(width: 2),
+                                Text(
+                                  "${car.rating}",
+                                  style: const TextStyle(
+                                    color: Colors.amber,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.teal.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              car.rentalMode == 'Both Available' ? 'Self/Driver' : car.rentalMode,
+                              style: const TextStyle(
+                                color: Colors.tealAccent,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF121212),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+
+        // 1. If drawer is open, close drawer
+        if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
+          _scaffoldKey.currentState?.closeDrawer();
+          return;
+        }
+
+        // 2. If in Owner Mode, switch back to Customer Mode
+        if (_isOwnerMode) {
+          setState(() {
+            _isOwnerMode = false;
+            _currentIndex = 0;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Switched to Customer Mode"),
+              duration: Duration(seconds: 1),
+            ),
+          );
+          return;
+        }
+
+        // 3. If on a sub-tab, return to Home Tab
+        if (_currentIndex != 0) {
+          setState(() {
+            _currentIndex = 0;
+          });
+          return;
+        }
+
+        // 4. Double-tap back within 2 seconds to exit
+        final now = DateTime.now();
+        if (_lastBackPressTime == null || now.difference(_lastBackPressTime!) > const Duration(seconds: 2)) {
+          _lastBackPressTime = now;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Press back again to exit app"),
+              duration: Duration(seconds: 2),
+            ),
+          );
+          return;
+        }
+
+        // Exit app gracefully
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        } else {
+          SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        backgroundColor: const Color(0xFF121212),
 
       // ================= DRAWER =================
       drawer: Drawer(
@@ -471,7 +759,58 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
 
-            // ================= MULTI-USER DEMO PROFILE SWITCHER =================
+            if (widget.isGuest)
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppTheme.primary.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppTheme.primary.withOpacity(0.35)),
+                ),
+                child: Column(
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.explore_outlined, color: AppTheme.primaryLight, size: 20),
+                        SizedBox(width: 8),
+                        Text(
+                          "Guest Explorer",
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      "Log in to rent cars, list your fleet, and access your full profile.",
+                      style: TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 40,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          Navigator.pushReplacement(
+                            context,
+                            MaterialPageRoute(builder: (_) => LoginPage()),
+                          );
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.primary,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        icon: const Icon(Icons.login, size: 16),
+                        label: const Text("Log In / Sign Up", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              // ================= MULTI-USER DEMO PROFILE SWITCHER =================
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               padding: const EdgeInsets.all(12),
@@ -632,6 +971,11 @@ class _HomePageState extends State<HomePage> {
                     value: _isOwnerMode,
                     activeColor: AppTheme.primary,
                     onChanged: (val) async {
+                      if (widget.isGuest) {
+                        Navigator.pop(context);
+                        _requireLogin(action: "switch to Owner / Host Mode");
+                        return;
+                      }
                       await loadBookingsFromLocalStorage();
                       setState(() {
                         _isOwnerMode = val;
@@ -761,11 +1105,13 @@ class _HomePageState extends State<HomePage> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              onTap: () {
+              onTap: () async {
                 Navigator.pop(context);
+                await AuthService().signOut();
+                if (!context.mounted) return;
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (context) => LoginPage()),
+                  MaterialPageRoute(builder: (context) => const LoginPage()),
                 );
               },
             ),
@@ -777,6 +1123,15 @@ class _HomePageState extends State<HomePage> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF121212),
         foregroundColor: Colors.white,
+        leading: Builder(
+          builder: (scaffoldContext) => IconButton(
+            icon: const Icon(Icons.menu),
+            tooltip: "Menu",
+            onPressed: () {
+              Scaffold.of(scaffoldContext).openDrawer();
+            },
+          ),
+        ),
         title: Text(
           _isOwnerMode ? "Owner Hub" : "Car Rental",
           style: const TextStyle(fontWeight: FontWeight.bold),
@@ -807,6 +1162,7 @@ class _HomePageState extends State<HomePage> {
                 ],
               ),
               onPressed: () {
+                if (!_requireLogin(action: "view your saved wishlist")) return;
                 Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -819,7 +1175,10 @@ class _HomePageState extends State<HomePage> {
               },
             ),
           IconButton(
-            onPressed: () => _showNotificationsSheet(context),
+            onPressed: () {
+              if (!_requireLogin(action: "view notifications")) return;
+              _showNotificationsSheet(context);
+            },
             icon: Stack(
               clipBehavior: Clip.none,
               children: [
@@ -926,6 +1285,7 @@ class _HomePageState extends State<HomePage> {
                 ),
               ],
       ),
+    ),
     );
   }
 
@@ -1894,37 +2254,44 @@ class _HomePageState extends State<HomePage> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: const BoxDecoration(
-                              color: AppTheme.primary,
-                              shape: BoxShape.circle,
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: const BoxDecoration(
+                                color: AppTheme.primary,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.shield, color: Colors.white, size: 22),
                             ),
-                            child: const Icon(Icons.shield, color: Colors.white, size: 22),
-                          ),
-                          const SizedBox(width: 12),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                "Welcome back, ${widget.name.isNotEmpty ? widget.name : 'Partner'}!",
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    "Welcome back, ${widget.name.isNotEmpty ? widget.name : 'Partner'}!",
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  const Text(
+                                    "Verified Fleet Host",
+                                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(height: 2),
-                              const Text(
-                                "Verified Fleet Host",
-                                style: TextStyle(color: Colors.grey, fontSize: 12),
-                              ),
-                            ],
-                          ),
-                        ],
+                            ),
+                          ],
+                        ),
                       ),
+                      const SizedBox(width: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
@@ -2580,7 +2947,10 @@ class _HomePageState extends State<HomePage> {
                     ),
                     const SizedBox(height: 16),
                     ElevatedButton.icon(
-                      onPressed: () => setState(() => _currentIndex = 3), // Add Car
+                      onPressed: () {
+                        if (!_requireLogin(action: "list a car in your fleet")) return;
+                        setState(() => _currentIndex = 3); // Add Car
+                      },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppTheme.primary,
                         foregroundColor: Colors.white,
@@ -2657,6 +3027,7 @@ class _HomePageState extends State<HomePage> {
                             icon: const Icon(Icons.edit_outlined, color: AppTheme.primaryLight, size: 20),
                             tooltip: "Edit Car Listing",
                             onPressed: () {
+                              if (!_requireLogin(action: "edit vehicle listings")) return;
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
@@ -2716,7 +3087,7 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildOwnerStatCard(String title, String value, IconData icon, Color color, {VoidCallback? onTap}) {
     final card = Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       decoration: BoxDecoration(
         color: const Color(0xFF1E1E1E),
         borderRadius: BorderRadius.circular(16),
@@ -2731,11 +3102,16 @@ class _HomePageState extends State<HomePage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                title,
-                style: const TextStyle(color: Colors.grey, fontSize: 12),
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.grey, fontSize: 12),
+                ),
               ),
-              Icon(icon, color: color, size: 20),
+              const SizedBox(width: 4),
+              Icon(icon, color: color, size: 18),
             ],
           ),
           const SizedBox(height: 10),
@@ -2743,16 +3119,24 @@ class _HomePageState extends State<HomePage> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(
-                value,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
+              Expanded(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    value,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ),
               ),
-              if (onTap != null)
+              if (onTap != null) ...[
+                const SizedBox(width: 4),
                 Icon(Icons.arrow_forward_ios, color: color.withOpacity(0.7), size: 12),
+              ],
             ],
           ),
         ],
@@ -3409,15 +3793,18 @@ class _HomePageState extends State<HomePage> {
                         return Container(
                           width: 280,
                           margin: const EdgeInsets.only(right: 15),
-                          child: Card(
-                            elevation: 4,
-                            color: const Color(0xFF1E1E1E),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
-                              side: const BorderSide(color: Colors.white10),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
+                          child: InkWell(
+                            onTap: () => _navigateToCarDetails(car),
+                            borderRadius: BorderRadius.circular(20),
+                            child: Card(
+                              elevation: 4,
+                              color: const Color(0xFF1E1E1E),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20),
+                                side: const BorderSide(color: Colors.white10),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(16),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
@@ -3541,44 +3928,49 @@ class _HomePageState extends State<HomePage> {
                                   ),
                                   const Spacer(),
                                   Row(
-                                    children: [
-                                      Text(
-                                        car.price,
-                                        style: const TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.bold,
-                                          color: AppTheme.primaryLight,
-                                        ),
-                                      ),
-                                      const Spacer(),
-                                      SizedBox(
-                                        height: 42,
-                                        child: ElevatedButton.icon(
-                                          onPressed: () =>
-                                              _navigateToCarDetails(car),
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: AppTheme.primary,
-                                            foregroundColor: Colors.white,
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                            ),
-                                          ),
-                                          icon: const Icon(
-                                            Icons.directions_car,
-                                            size: 18,
-                                          ),
-                                          label: const Text(
-                                            "Rent Now",
-                                            style: TextStyle(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            car.price.toLowerCase().contains("day")
+                                                ? "PKR ${car.price.replaceAll(RegExp(r'[a-zA-Z./\s]'), '')} / day"
+                                                : "PKR ${car.price} / day",
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 16,
                                               fontWeight: FontWeight.bold,
+                                              color: AppTheme.primaryLight,
                                             ),
                                           ),
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                                        const SizedBox(width: 8),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          decoration: BoxDecoration(
+                                            color: AppTheme.primary.withOpacity(0.15),
+                                            borderRadius: BorderRadius.circular(10),
+                                          ),
+                                          child: const Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                "Details",
+                                                style: TextStyle(
+                                                  color: AppTheme.primaryLight,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                              SizedBox(width: 3),
+                                              Icon(Icons.arrow_forward_ios, size: 10, color: AppTheme.primaryLight),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -3606,116 +3998,7 @@ class _HomePageState extends State<HomePage> {
               itemCount: cars.length,
               itemBuilder: (context, index) {
                 final car = cars[index];
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 15),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E1E1E),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        _buildCarImage(
-                          car.image,
-                          width: 90,
-                          height: 75,
-                          borderRadius: 12,
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                car.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  const Icon(
-                                    Icons.star,
-                                    color: Colors.amber,
-                                    size: 16,
-                                  ),
-                                  Text(
-                                    " ${car.rating} • ${car.seats} • ${car.rentalMode == 'Both Available' ? 'Self/Driver' : car.rentalMode}",
-                                    style: const TextStyle(
-                                      color: Colors.grey,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 6),
-                              Row(
-                                children: [
-                                  Text(
-                                    car.price,
-                                    style: const TextStyle(
-                                      color: AppTheme.primaryLight,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 15,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Builder(
-                                    builder: (context) {
-                                      final summary = getCarAvailabilitySummary(car);
-                                      final isAvail = summary == "Available Now";
-                                      return Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: (isAvail ? Colors.green : Colors.amber).withOpacity(0.15),
-                                          borderRadius: BorderRadius.circular(4),
-                                        ),
-                                        child: Text(
-                                          isAvail ? "Available" : summary,
-                                          style: TextStyle(
-                                            color: isAvail ? Colors.greenAccent : Colors.amberAccent,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        ElevatedButton(
-                          onPressed: () => _navigateToCarDetails(car),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppTheme.primary,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 10,
-                            ),
-                          ),
-                          child: const Text(
-                            "Rent",
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
+                return _buildPakWheelsCarCard(car);
               },
             ),
 
@@ -3877,83 +4160,7 @@ class _HomePageState extends State<HomePage> {
                     itemCount: searchResults.length,
                     itemBuilder: (context, index) {
                       final car = searchResults[index];
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1E1E1E),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: ListTile(
-                          onTap: () => _navigateToCarDetails(car),
-                          contentPadding: const EdgeInsets.all(10),
-                          leading: _buildCarImage(
-                            car.image,
-                            width: 70,
-                            height: 50,
-                            borderRadius: 10,
-                          ),
-                          title: Text(
-                            car.name,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const SizedBox(height: 3),
-                              Text(
-                                "Rs. ${car.price} • ${car.transmission} • ${car.rentalMode == 'Both Available' ? 'Self/Driver' : car.rentalMode}",
-                                style: const TextStyle(color: Colors.grey, fontSize: 13),
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  const Icon(Icons.location_on, color: AppTheme.primary, size: 13),
-                                  const SizedBox(width: 3),
-                                  Expanded(
-                                    child: Text(
-                                      car.location,
-                                      style: const TextStyle(
-                                        color: AppTheme.primaryLight,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: Icon(
-                                  isCarFavorite(car.id) ? Icons.favorite : Icons.favorite_border,
-                                  color: isCarFavorite(car.id) ? Colors.redAccent : Colors.grey,
-                                  size: 20,
-                                ),
-                                onPressed: () async {
-                                  await toggleFavoriteCar(car.id);
-                                  setState(() {});
-                                },
-                              ),
-                              ElevatedButton(
-                                onPressed: () => _navigateToCarDetails(car),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppTheme.primary,
-                                  foregroundColor: Colors.white,
-                                ),
-                                child: const Text("Rent"),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
+                      return _buildPakWheelsCarCard(car);
                     },
                   ),
           ),
@@ -3964,6 +4171,63 @@ class _HomePageState extends State<HomePage> {
 
   // ================= TAB 2: BOOKINGS TAB =================
   Widget _buildBookingsTab() {
+    if (widget.isGuest) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(30),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(22),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF1E1E1E),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.receipt_long_outlined,
+                  size: 56,
+                  color: AppTheme.primaryLight,
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                "Sign In to See Bookings",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                "You're exploring as a guest. Log in to track your active reservations and rental history.",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey, fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => LoginPage()),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                icon: const Icon(Icons.login, size: 18),
+                label: const Text("Log In / Sign Up", style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     if (userBookingsList.isEmpty) {
       return Center(
         child: Padding(
@@ -4154,7 +4418,6 @@ class _HomePageState extends State<HomePage> {
                                           style: const TextStyle(
                                             color: Colors.white,
                                             fontWeight: FontWeight.bold,
-                                            fontSize: 16,
                                           ),
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
@@ -4373,6 +4636,9 @@ class _HomePageState extends State<HomePage> {
 
   // ================= TAB 3: PROFILE TAB =================
   Widget _buildProfileTab() {
+    if (widget.isGuest) {
+      return _buildGuestProfileView();
+    }
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -4432,6 +4698,10 @@ class _HomePageState extends State<HomePage> {
               title: "CNIC & License Verification",
               subtitle: currentUserVerification.isVerified ? "✅ Verified Renter Shield Active" : "Upload CNIC & Driving License for instant booking",
               onTap: () {
+                if (widget.isGuest) {
+                  _requireLogin(action: "verify your identity");
+                  return;
+                }
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (context) => const VerificationScreen()),
@@ -4568,10 +4838,12 @@ class _HomePageState extends State<HomePage> {
             width: double.infinity,
             height: 50,
             child: ElevatedButton.icon(
-              onPressed: () {
+              onPressed: () async {
+                await AuthService().signOut();
+                if (!context.mounted) return;
                 Navigator.pushAndRemoveUntil(
                   context,
-                  MaterialPageRoute(builder: (context) => LoginPage()),
+                  MaterialPageRoute(builder: (context) => const LoginPage()),
                   (route) => false,
                 );
               },
@@ -4619,6 +4891,147 @@ class _HomePageState extends State<HomePage> {
         trailing: const Icon(Icons.arrow_forward_ios, color: Colors.grey, size: 15),
         onTap: onTap,
       ),
+    );
+  }
+
+  Widget _buildGuestProfileView() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 20),
+      child: Column(
+        children: [
+          const SizedBox(height: 20),
+          Container(
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E1E1E),
+              shape: BoxShape.circle,
+              border: Border.all(color: AppTheme.primary.withOpacity(0.5), width: 2),
+            ),
+            child: const Icon(Icons.person_outline, size: 64, color: AppTheme.primaryLight),
+          ),
+          const SizedBox(height: 18),
+          const Text(
+            "Log in to your profile",
+            style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            "Sign in or create an account to manage your trips, unlock instant bookings, and access host features.",
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey, fontSize: 13, height: 1.5),
+          ),
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: ElevatedButton(
+              onPressed: () {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => LoginPage()),
+                );
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                foregroundColor: Colors.white,
+                elevation: 4,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.login, size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    "Log In or Sign Up",
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 30),
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1A1A),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "Why create an account?",
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+                const SizedBox(height: 16),
+                _buildGuestBenefitRow(
+                  icon: Icons.directions_car_outlined,
+                  title: "Instant Rental Booking",
+                  subtitle: "Reserve any car across Twin Cities in under 2 minutes.",
+                ),
+                const SizedBox(height: 14),
+                _buildGuestBenefitRow(
+                  icon: Icons.shield_outlined,
+                  title: "Verified Identity Shield",
+                  subtitle: "CNIC & driving license verification for zero deposit delays.",
+                ),
+                const SizedBox(height: 14),
+                _buildGuestBenefitRow(
+                  icon: Icons.chat_bubble_outline,
+                  title: "Direct Host Chat",
+                  subtitle: "Communicate directly with vehicle owners anytime.",
+                ),
+                const SizedBox(height: 14),
+                _buildGuestBenefitRow(
+                  icon: Icons.monetization_on_outlined,
+                  title: "Host Fleet & Earn Income",
+                  subtitle: "List your personal vehicle and earn passive income monthly.",
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 25),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGuestBenefitRow({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: AppTheme.primary.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: AppTheme.primaryLight, size: 20),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: const TextStyle(color: Colors.grey, fontSize: 11, height: 1.3),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

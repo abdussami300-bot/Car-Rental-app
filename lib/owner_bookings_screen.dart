@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'theme.dart';
 import 'user_data.dart';
+import 'firestore_service.dart';
 import 'chat_screen.dart';
 import 'vehicle_inspection_screen.dart';
 
@@ -79,6 +80,7 @@ class _OwnerBookingsScreenState extends State<OwnerBookingsScreen> {
       booking.status = "Confirmed";
     });
     await saveBookingsToLocalStorage();
+    FirestoreService.updateBookingStatusInFirestore(booking.id, "Confirmed");
     widget.onBookingsChanged?.call();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -105,6 +107,7 @@ class _OwnerBookingsScreenState extends State<OwnerBookingsScreen> {
       booking.status = "In Progress";
     });
     await saveBookingsToLocalStorage();
+    FirestoreService.updateBookingStatusInFirestore(booking.id, "In Progress");
     widget.onBookingsChanged?.call();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -167,6 +170,7 @@ class _OwnerBookingsScreenState extends State<OwnerBookingsScreen> {
       booking.status = "Declined";
     });
     await saveBookingsToLocalStorage();
+    FirestoreService.updateBookingStatusInFirestore(booking.id, "Declined");
     widget.onBookingsChanged?.call();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -190,6 +194,7 @@ class _OwnerBookingsScreenState extends State<OwnerBookingsScreen> {
       booking.status = "Completed";
     });
     await saveBookingsToLocalStorage();
+    FirestoreService.updateBookingStatusInFirestore(booking.id, "Completed");
     widget.onBookingsChanged?.call();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -216,6 +221,7 @@ class _OwnerBookingsScreenState extends State<OwnerBookingsScreen> {
       userBookingsList.removeWhere((item) => item.id == booking.id);
     });
     await saveBookingsToLocalStorage();
+    FirestoreService.deleteBookingFromFirestore(booking.id);
     widget.onBookingsChanged?.call();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
