@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'theme.dart';
@@ -5,6 +6,7 @@ import 'car details.dart';
 import 'my_car.dart';
 import 'add_car.dart';
 import 'owner_bookings_screen.dart';
+import 'owner_chat_list_screen.dart';
 import 'login.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'user_data.dart';
@@ -12,7 +14,11 @@ import 'verification_screen.dart';
 import 'favorites_screen.dart';
 import 'booking_details_screen.dart';
 import 'host_earnings_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'auth_service.dart';
+import 'firestore_service.dart';
+import 'host_onboarding_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,12 +55,14 @@ class HomePage extends StatefulWidget {
   final String name;
   final String email;
   final bool isGuest;
+  final bool? initialIsOwner;
 
   const HomePage({
     super.key,
     required this.name,
     required this.email,
     this.isGuest = false,
+    this.initialIsOwner,
   });
 
   @override
@@ -70,13 +78,22 @@ class _HomePageState extends State<HomePage> {
   DateTime? _returnDate;
   DateTime? _lastBackPressTime;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  String _selectedCustomerBookingFilter = "Active";
 
   String get _currentUserEmail => widget.isGuest
       ? "guest@explore.com"
-      : (activeUserEmail.isNotEmpty ? activeUserEmail : (widget.email.isNotEmpty ? widget.email : email)).trim().toLowerCase();
+      : (widget.email.trim().isNotEmpty
+          ? widget.email.trim().toLowerCase()
+          : (activeUserEmail.trim().isNotEmpty
+              ? activeUserEmail.trim().toLowerCase()
+              : email.trim().toLowerCase()));
   String get _currentUserName => widget.isGuest
       ? "Guest User"
-      : (activeUserName.isNotEmpty ? activeUserName : (widget.name.isNotEmpty ? widget.name : name));
+      : (widget.name.trim().isNotEmpty
+          ? widget.name.trim()
+          : (activeUserName.trim().isNotEmpty
+              ? activeUserName.trim()
+              : (name.trim().isNotEmpty ? name.trim() : "User")));
 
   bool _requireLogin({String action = "perform this action"}) {
     if (widget.isGuest) {
@@ -124,6 +141,162 @@ class _HomePageState extends State<HomePage> {
     return true;
   }
 
+  void _handleUnapprovedHostAttempt(String status) {
+    if (status == "pending") {
+      final myPendingCar = allCarsList.firstWhere(
+        (c) =>
+            c.isUserCar &&
+            (c.approvalStatus == "pending" || c.approvalStatus == "pending_update") &&
+            (c.isOwnedBy(_currentUserEmail) || (activeUserId.isNotEmpty && c.ownerId == activeUserId)),
+        orElse: () => allCarsList.firstWhere(
+          (c) => c.isUserCar,
+          orElse: () => allCarsList.first,
+        ),
+      );
+
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1E1E1E),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.hourglass_top_rounded, color: Colors.amber, size: 44),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                "Host Application Under Review",
+                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                "Your Host application and vehicle listing (${myPendingCar.name}) are currently under review by our admin team.\n\nOnce approved, Host Mode will be automatically activated on your account.",
+                style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                height: 44,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text("Understood", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } else if (status == "rejected") {
+      _showSorryRejectedDialog();
+    } else {
+      // status == "none": First time host onboarding
+      showModalBottomSheet(
+        context: context,
+        backgroundColor: const Color(0xFF1E1E1E),
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        builder: (ctx) => Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+              ),
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppTheme.primary.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.directions_car, color: AppTheme.primary, size: 42),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                "Become a Car Host",
+                style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                "To enable Host Mode, please list your vehicle with CNIC credentials and vehicle photos. Once approved by our team, Host Mode will be unlocked.",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.black26,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: const Column(
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.check_circle, color: Colors.green, size: 16),
+                        SizedBox(width: 8),
+                        Text("No driving license needed for car host", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                      ],
+                    ),
+                    SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Icon(Icons.check_circle, color: Colors.green, size: 16),
+                        SizedBox(width: 8),
+                        Text("Existing verified CNIC auto-reused", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const HostOnboardingScreen()),
+                    ).then((_) => setState(() {}));
+                  },
+                  child: const Text(
+                    "List Your Car",
+                    style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+  }
+
   // ================= CUSTOMER ADVANCED FILTER STATE =================
   static const double _kMinPrice = 2000;
   static const double _kMaxPrice = 50000;
@@ -134,10 +307,41 @@ class _HomePageState extends State<HomePage> {
   String _selectedRentalMode = "All";
   String _sortBy = "Default";
 
+  late final Stream<List<ChatMessage>> _allMessagesStream;
+
   @override
   void initState() {
     super.initState();
+    _allMessagesStream = FirestoreService.streamAllMessages();
+    if (widget.initialIsOwner != null) {
+      _isOwnerMode = widget.initialIsOwner!;
+      activeUserRole = _isOwnerMode ? "owner" : "customer";
+    }
     _loadStoredData();
+    FirestoreService.addCarsListener(_onCarsUpdated);
+    FirestoreService.addBookingsListener(_onBookingsUpdated);
+  }
+
+  StreamSubscription<DocumentSnapshot>? _verificationSub;
+
+  @override
+  void dispose() {
+    _verificationSub?.cancel();
+    FirestoreService.removeCarsListener(_onCarsUpdated);
+    FirestoreService.removeBookingsListener(_onBookingsUpdated);
+    super.dispose();
+  }
+
+  void _onBookingsUpdated() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _onCarsUpdated() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> _loadStoredData() async {
@@ -148,19 +352,403 @@ class _HomePageState extends State<HomePage> {
     }
     final prefs = await SharedPreferences.getInstance();
     if (mounted) {
-      final savedEmail = prefs.getString("app_user_active_email");
-      final savedName = prefs.getString("app_user_active_name");
-      if (savedEmail != null && savedEmail.isNotEmpty) {
-        activeUserEmail = savedEmail;
+      if (widget.email.trim().isNotEmpty) {
+        activeUserEmail = widget.email.trim().toLowerCase();
+        activeUserName = widget.name.trim();
+        name = widget.name.trim();
+        email = widget.email.trim().toLowerCase();
+        await prefs.setString("app_user_active_email", activeUserEmail);
+        await prefs.setString("app_user_active_name", activeUserName);
+      } else {
+        final savedEmail = prefs.getString("app_user_active_email");
+        final savedName = prefs.getString("app_user_active_name");
+        if (savedEmail != null && savedEmail.isNotEmpty) {
+          activeUserEmail = savedEmail.trim().toLowerCase();
+          email = savedEmail.trim().toLowerCase();
+        }
+        if (savedName != null && savedName.isNotEmpty) {
+          activeUserName = savedName.trim();
+          name = savedName.trim();
+        }
       }
-      if (savedName != null && savedName.isNotEmpty) {
-        activeUserName = savedName;
+
+      final savedUid = prefs.getString("app_user_active_id") ?? (FirebaseAuth.instance.currentUser?.uid ?? "");
+      if (savedUid.isNotEmpty) activeUserId = savedUid;
+
+      final savedRole = prefs.getString("app_user_role");
+      final isHostApproved = isUserApprovedHost();
+
+      bool isOwnerDetermined = false;
+      if (prefs.containsKey("app_user_is_owner_mode")) {
+        isOwnerDetermined = prefs.getBool("app_user_is_owner_mode") ?? false;
+      } else if (widget.initialIsOwner != null) {
+        isOwnerDetermined = widget.initialIsOwner!;
+      } else if (savedRole == "owner") {
+        isOwnerDetermined = true;
+      }
+
+      if (isOwnerDetermined && !isHostApproved && savedRole != "admin") {
+        isOwnerDetermined = false;
+        prefs.setBool("app_user_is_owner_mode", false);
+        prefs.setString("app_user_role", "customer");
       }
 
       setState(() {
-        _isOwnerMode = prefs.getBool("app_user_is_owner_mode") ?? _isOwnerMode;
+        _isOwnerMode = isOwnerDetermined;
+        activeUserRole = _isOwnerMode ? "owner" : "customer";
       });
+
+      FirestoreService.initRealtimeListeners();
+      FirestoreService.syncBookingsWithFirestore().then((_) {
+        if (mounted) setState(() {});
+      });
+
+      _syncLiveVerification();
     }
+  }
+
+  void _syncLiveVerification() {
+    _verificationSub?.cancel();
+    final user = FirebaseAuth.instance.currentUser;
+    final userUid = (user?.uid ?? activeUserId).trim();
+    if (userUid.isEmpty) return;
+
+    _verificationSub = FirebaseFirestore.instance.collection('users').doc(userUid).snapshots().listen((doc) {
+      if (doc.exists && doc.data() != null && mounted) {
+        final data = doc.data() as Map<String, dynamic>;
+        final previousStatus = currentUserVerification.status;
+        currentUserVerification = VerificationData.fromJson(data);
+        saveVerificationToLocalStorage();
+
+        final userRole = (data['role'] ?? '').toString().toLowerCase().trim();
+        final isHostVer = data['isHostVerified'] == true;
+
+        // Only switch to Owner Mode if user has at least one APPROVED car!
+        // CNIC / document approval alone does NOT make a user an owner.
+        final hasApprovedCar = isUserApprovedHost();
+        if (hasApprovedCar) {
+          if (previousStatus == 'pending' && !_isOwnerMode) {
+            _isOwnerMode = true;
+            activeUserRole = "owner";
+            SharedPreferences.getInstance().then((prefs) {
+              prefs.setString("app_user_role", "owner");
+              prefs.setBool("app_user_is_owner_mode", true);
+            });
+          }
+        } else {
+          // If no approved car exists, user must stay in or revert to Customer mode
+          if (_isOwnerMode && userRole != 'admin') {
+            _isOwnerMode = false;
+            activeUserRole = "customer";
+            SharedPreferences.getInstance().then((prefs) {
+              prefs.setString("app_user_role", "customer");
+              prefs.setBool("app_user_is_owner_mode", false);
+            });
+          }
+        }
+
+        final alert = data['lastVerificationAlert'] is Map ? Map<String, dynamic>.from(data['lastVerificationAlert'] as Map) : null;
+        if (alert != null && alert['seen'] == false) {
+          // Acknowledge alert in Firestore so it doesn't pop up repeatedly
+          doc.reference.set({
+            'lastVerificationAlert': {'seen': true}
+          }, SetOptions(merge: true));
+
+          final alertType = alert['type']?.toString();
+          if (alertType == 'approved') {
+            _showCongratulationsApprovedDialog(alert);
+          } else if (alertType == 'rejected') {
+            _showSorryRejectedDialog(alert);
+          }
+        }
+
+        setState(() {});
+      }
+    }, onError: (_) {});
+  }
+
+  // ================= REAL-TIME VERIFICATION MODALS =================
+  void _showCongratulationsApprovedDialog([Map<String, dynamic>? alert]) {
+    final isHostAlert = alert?['isHost'] == true ||
+        (alert?['title']?.toString().toLowerCase().contains('host') ?? false);
+
+    final title = alert?['title']?.toString() ??
+        (isHostAlert ? "🎉 Congratulations! You are an Approved Host" : "🎉 Identity Verified Successfully!");
+    final msg = alert?['message']?.toString() ??
+        (isHostAlert
+            ? "Your host identity and vehicle documents have been verified by the Admin team. Your car is now live in the rental catalog!"
+            : "Your CNIC and Driving License documents have been verified by Admin. You can now rent cars smoothly!");
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final bool canSwitchToHost = isHostAlert && isUserApprovedHost();
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1E1E1E),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: const BorderSide(color: Colors.greenAccent, width: 1.5),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: Colors.green.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.5), width: 2),
+                ),
+                child: const Icon(Icons.verified, color: Colors.greenAccent, size: 48),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                title,
+                style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                msg,
+                style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green.shade700,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  icon: Icon(canSwitchToHost ? (_isOwnerMode ? Icons.check_circle_outline : Icons.swap_horiz) : Icons.check_circle, size: 20),
+                label: Text(
+                  canSwitchToHost
+                      ? (_isOwnerMode ? "Great! Continue" : "Switch to Host Mode Now")
+                      : (isHostAlert ? "Understood" : "Awesome! Start Renting"),
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  if (canSwitchToHost && !_isOwnerMode) {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool("app_user_is_owner_mode", true);
+                    await prefs.setString("app_user_role", "owner");
+                    if (mounted) {
+                      setState(() {
+                        _isOwnerMode = true;
+                        activeUserRole = "owner";
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("🚀 Welcome to Host Mode! Your vehicle listing is live."),
+                          backgroundColor: Colors.green,
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
+                  }
+                },
+              ),
+            ),
+          ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showSorryRejectedDialog([Map<String, dynamic>? alert]) {
+    final myRejectedCar = allCarsList.firstWhere(
+      (c) =>
+          c.isUserCar &&
+          c.approvalStatus == "rejected" &&
+          (c.isOwnedBy(_currentUserEmail) || (activeUserId.isNotEmpty && c.ownerId == activeUserId)),
+      orElse: () => allCarsList.firstWhere(
+        (c) => c.isUserCar,
+        orElse: () => allCarsList.first,
+      ),
+    );
+
+    final reason = alert?['message']?.toString() ??
+        (myRejectedCar.rejectionReason.isNotEmpty
+            ? myRejectedCar.rejectionReason
+            : (currentUserVerification.rejectionReason.isNotEmpty
+                ? currentUserVerification.rejectionReason
+                : "Admin requested revision of document or vehicle photos."));
+
+    final List<String> issues = [];
+    if (alert?['issues'] is List) {
+      issues.addAll((alert!['issues'] as List).map((e) => e.toString()));
+    } else if (myRejectedCar.rejectionIssues.isNotEmpty) {
+      issues.addAll(myRejectedCar.rejectionIssues);
+    } else if (currentUserVerification.rejectionIssues.isNotEmpty) {
+      issues.addAll(currentUserVerification.rejectionIssues);
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: Colors.redAccent, width: 1.5),
+        ),
+        content: SizedBox(
+          width: 440,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.redAccent.withValues(alpha: 0.4), width: 1.5),
+                  ),
+                  child: const Icon(Icons.highlight_off_rounded, color: Colors.redAccent, size: 44),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  "Application Requires Revision",
+                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  "We reviewed your submission, but some details or documents require attention before approval:",
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.redAccent.withValues(alpha: 0.4)),
+                  ),
+                  child: Text(
+                    "Admin Feedback:\n$reason",
+                    style: const TextStyle(color: Colors.white, fontSize: 12, height: 1.4),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+                if (issues.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      "Flagged Items to Fix (Tap to jump directly):",
+                      style: TextStyle(color: Colors.amber.shade300, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF141414),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Column(
+                      children: [
+                        for (int i = 0; i < issues.length; i++) ...[
+                          InkWell(
+                            onTap: () {
+                              Navigator.pop(ctx);
+                              final isCnic = issues[i].toLowerCase().contains("cnic");
+                              final isSpecs = issues[i].toLowerCase().contains("plate") || issues[i].toLowerCase().contains("model");
+                              final targetStep = isCnic ? 0 : (isSpecs ? 1 : 2);
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => HostOnboardingScreen(
+                                    initialStep: targetStep,
+                                    initialIssues: issues,
+                                  ),
+                                ),
+                              ).then((_) => setState(() {}));
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 16),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      issues[i],
+                                      style: const TextStyle(color: Colors.white70, fontSize: 11),
+                                    ),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.primary.withValues(alpha: 0.2),
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(color: AppTheme.primary, width: 0.8),
+                                    ),
+                                    child: const Text("Fix", style: TextStyle(color: AppTheme.primaryLight, fontSize: 10, fontWeight: FontWeight.bold)),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          if (i < issues.length - 1)
+                            const Divider(color: Colors.white10, height: 1),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Colors.white24),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text("Close", style: TextStyle(color: Colors.grey)),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.primary,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => HostOnboardingScreen(
+                                initialStep: issues.any((i) => i.toLowerCase().contains("cnic")) ? 0 : 2,
+                                initialIssues: issues,
+                              ),
+                            ),
+                          ).then((_) => setState(() {}));
+                        },
+                        child: const Text("Resubmit", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   // ================= TWIN CITIES (ISLAMABAD & RAWALPINDI) =================
@@ -267,7 +855,11 @@ class _HomePageState extends State<HomePage> {
   // Multiple users CAN request the same car.
   // But this car is hidden ONLY from the specific user who has an active (Pending/Confirmed) request for it!
   List<CarItem> get _availableCars {
-    return allCarsList.where((car) => !hasUserRequestedCar(car, _currentUserEmail)).toList();
+    return allCarsList.where((car) =>
+        !deletedCarIds.contains(car.id) &&
+        !deletedCarIds.contains(car.id.trim()) &&
+        car.isPubliclyVisible &&
+        !hasUserRequestedCar(car, _currentUserEmail)).toList();
   }
 
   List<String> get _brands {
@@ -420,6 +1012,8 @@ class _HomePageState extends State<HomePage> {
           availableFrom: car.availableFrom,
           availableTo: car.availableTo,
           photos: car.photos,
+          features: car.features,
+          category: car.category,
           currentUserEmail: _currentUserEmail,
           currentUserName: _currentUserName,
           isGuest: widget.isGuest,
@@ -680,22 +1274,7 @@ class _HomePageState extends State<HomePage> {
           return;
         }
 
-        // 2. If in Owner Mode, switch back to Customer Mode
-        if (_isOwnerMode) {
-          setState(() {
-            _isOwnerMode = false;
-            _currentIndex = 0;
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Switched to Customer Mode"),
-              duration: Duration(seconds: 1),
-            ),
-          );
-          return;
-        }
-
-        // 3. If on a sub-tab, return to Home Tab
+        // 2. If on a sub-tab, return to Home Tab
         if (_currentIndex != 0) {
           setState(() {
             _currentIndex = 0;
@@ -808,114 +1387,9 @@ class _HomePageState extends State<HomePage> {
                     ),
                   ],
                 ),
-              )
-            else
-              // ================= MULTI-USER DEMO PROFILE SWITCHER =================
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF181818),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.amber.withOpacity(0.35), width: 1.2),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          color: Colors.amber.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Icon(Icons.people_alt_outlined, color: Colors.amber, size: 14),
-                      ),
-                      const SizedBox(width: 8),
-                      const Text(
-                        "SWITCH TEST PROFILE",
-                        style: TextStyle(
-                          color: Colors.amber,
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: demoUserProfiles.map((user) {
-                      final isSelected = _currentUserEmail == user.email.toLowerCase();
-                      return InkWell(
-                        onTap: () async {
-                          activeUserEmail = user.email;
-                          activeUserName = user.name;
-                          await loadBookingsFromLocalStorage();
-                          setState(() {
-                            if (user.role == "Host") {
-                              _isOwnerMode = true;
-                            } else {
-                              _isOwnerMode = false;
-                            }
-                            _currentIndex = 0;
-                          });
-                          final prefs = await SharedPreferences.getInstance();
-                          await prefs.setString("app_user_active_email", user.email);
-                          await prefs.setString("app_user_active_name", user.name);
-                          await prefs.setBool("app_user_is_owner_mode", _isOwnerMode);
-                          if (context.mounted) {
-                            Navigator.pop(context);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text("Switched active profile to ${user.name} (${user.role})"),
-                                backgroundColor: user.color,
-                                duration: const Duration(seconds: 2),
-                              ),
-                            );
-                          }
-                        },
-                        borderRadius: BorderRadius.circular(8),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: isSelected ? user.color.withOpacity(0.25) : const Color(0xFF222222),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: isSelected ? user.color : Colors.white12,
-                              width: isSelected ? 1.5 : 1.0,
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              CircleAvatar(
-                                radius: 5,
-                                backgroundColor: user.color,
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                user.name,
-                                style: TextStyle(
-                                  color: isSelected ? Colors.white : Colors.white70,
-                                  fontSize: 11,
-                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ],
-              ),
-            ),
 
-            // ================= MODE SWITCHER CARD (inDrive Style) =================
+            // ================= MODE SWITCHER CARD (Host Mode) =================
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               padding: const EdgeInsets.all(12),
@@ -976,13 +1450,30 @@ class _HomePageState extends State<HomePage> {
                         _requireLogin(action: "switch to Owner / Host Mode");
                         return;
                       }
+
+                      if (val) {
+                        // User wants to switch to Owner Mode -> Check Admin Approval!
+                        final hostStatus = getUserHostApplicationStatus();
+                        if (hostStatus != "approved") {
+                          Navigator.pop(context);
+                          _handleUnapprovedHostAttempt(hostStatus);
+                          return;
+                        }
+                      }
+
                       await loadBookingsFromLocalStorage();
+                      final newRole = val ? "owner" : "customer";
                       setState(() {
                         _isOwnerMode = val;
+                        activeUserRole = newRole;
                         _currentIndex = 0;
                       });
                       final prefs = await SharedPreferences.getInstance();
                       await prefs.setBool("app_user_is_owner_mode", val);
+                      await prefs.setString("app_user_role", newRole);
+                      if (val) {
+                        AuthService().updateUserRole("owner");
+                      }
                       if (context.mounted) {
                         Navigator.pop(context);
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -1087,6 +1578,19 @@ class _HomePageState extends State<HomePage> {
                     style: TextStyle(color: Colors.white)),
                 onTap: () {
                   Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const AddCar()),
+                  );
+                },
+              ),
+              ListTile(
+                leading:
+                    const Icon(Icons.chat_bubble_outline, color: AppTheme.primary),
+                title: const Text("Messages",
+                    style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(context);
                   setState(() => _currentIndex = 3);
                 },
               ),
@@ -1107,11 +1611,86 @@ class _HomePageState extends State<HomePage> {
               ),
               onTap: () async {
                 Navigator.pop(context);
+                if (widget.isGuest) {
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (context) => const LoginPage()),
+                    (route) => false,
+                  );
+                  return;
+                }
+
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: const Color(0xFF1E1E1E),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: const BorderSide(color: Colors.white10),
+                    ),
+                    title: const Row(
+                      children: [
+                        Icon(Icons.logout_rounded, color: AppTheme.primary, size: 22),
+                        SizedBox(width: 10),
+                        Text(
+                          "Confirm Logout",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    content: const Text(
+                      "Are you sure you want to log out of your account?",
+                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                      ),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.primary,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: const Text(
+                          "Logout",
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+
+                if (confirm != true) return;
+
+                _verificationSub?.cancel();
                 await AuthService().signOut();
-                if (!context.mounted) return;
-                Navigator.pushReplacement(
+                name = "";
+                email = "";
+                activeUserEmail = "";
+                activeUserName = "";
+                activeUserId = "";
+                activeUserRole = "customer";
+                favoriteCarIds.clear();
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.remove("app_user_active_email");
+                await prefs.remove("app_user_active_name");
+                await prefs.remove("app_user_active_id");
+                await prefs.remove("app_user_role");
+                await prefs.remove("app_user_is_owner_mode");
+                if (!mounted) return;
+                Navigator.pushAndRemoveUntil(
                   context,
                   MaterialPageRoute(builder: (context) => const LoginPage()),
+                  (route) => false,
                 );
               },
             ),
@@ -1212,10 +1791,7 @@ class _HomePageState extends State<HomePage> {
         selectedItemColor: AppTheme.primary,
         unselectedItemColor: Colors.grey,
         currentIndex: _currentIndex,
-        onTap: (int index) async {
-          if ((!_isOwnerMode && index == 2) || (_isOwnerMode && index == 1)) {
-            await loadBookingsFromLocalStorage();
-          }
+        onTap: (int index) {
           setState(() {
             _currentIndex = index;
           });
@@ -1255,10 +1831,61 @@ class _HomePageState extends State<HomePage> {
                   activeIcon: Icon(Icons.directions_car),
                   label: "My Fleet",
                 ),
-                const BottomNavigationBarItem(
-                  icon: Icon(Icons.add_circle_outline),
-                  activeIcon: Icon(Icons.add_circle),
-                  label: "Add Car",
+                BottomNavigationBarItem(
+                  icon: StreamBuilder<List<ChatMessage>>(
+                    stream: _allMessagesStream,
+                    builder: (context, snapshot) {
+                      final msgs = snapshot.hasData ? snapshot.data! : chatMessagesList;
+                      final myEmail = (FirebaseAuth.instance.currentUser?.email ?? activeUserEmail).trim().toLowerCase();
+                      final myUid = FirebaseAuth.instance.currentUser?.uid ?? activeUserId;
+
+                      final unreadCount = msgs.where((m) {
+                        final isOwnerMsg = (myEmail.isNotEmpty &&
+                                (m.ownerEmail.trim().toLowerCase() == myEmail ||
+                                 (m.isFromHost && m.senderEmail.trim().toLowerCase() == myEmail))) ||
+                            (myUid.isNotEmpty &&
+                                (m.ownerId.trim() == myUid ||
+                                 (m.isFromHost && m.senderId.trim() == myUid))) ||
+                            allCarsList.any((c) {
+                              final sameCar = (m.carId.isNotEmpty && c.id == m.carId) ||
+                                  (m.carName.isNotEmpty && c.name.trim().toLowerCase() == m.carName.trim().toLowerCase());
+                              return sameCar && (c.isOwnedBy(myEmail) || c.isOwnedByActiveUser);
+                            });
+                        return isOwnerMsg && !m.isFromHost && !m.isRead;
+                      }).length;
+
+                      return Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          const Icon(Icons.chat_bubble_outline),
+                          if (unreadCount > 0)
+                            Positioned(
+                              right: -6,
+                              top: -4,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                decoration: const BoxDecoration(
+                                  color: Colors.redAccent,
+                                  shape: BoxShape.circle,
+                                ),
+                                constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                                child: Text(
+                                  unreadCount > 9 ? '9+' : '$unreadCount',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                  activeIcon: const Icon(Icons.chat_bubble),
+                  label: "Chat",
                 ),
                 const BottomNavigationBarItem(
                   icon: Icon(Icons.person_outline),
@@ -1508,7 +2135,9 @@ class _HomePageState extends State<HomePage> {
           if (notif.type == "request" || notif.type == "accepted" || notif.type == "in_progress" || notif.type == "completed") {
             Navigator.push(
               context,
-              MaterialPageRoute(builder: (context) => const OwnerBookingsScreen()),
+              MaterialPageRoute(builder: (context) => OwnerBookingsScreen(
+                currentHostName: widget.name.isNotEmpty ? widget.name : (activeUserName.isNotEmpty ? activeUserName : name),
+              )),
             ).then((_) => setState(() {}));
           } else if (notif.type == "car_listed") {
             setState(() {
@@ -2171,19 +2800,13 @@ class _HomePageState extends State<HomePage> {
         case 1:
           return OwnerBookingsScreen(
             isEmbedded: true,
+            currentHostName: widget.name.isNotEmpty ? widget.name : (activeUserName.isNotEmpty ? activeUserName : name),
             onBookingsChanged: () => setState(() {}),
           );
         case 2:
           return const MyCar(isEmbedded: true);
         case 3:
-          return AddCar(
-            isEmbedded: true,
-            onCarAdded: () {
-              setState(() {
-                _currentIndex = 2; // My Fleet
-              });
-            },
-          );
+          return const OwnerChatListScreen();
         case 4:
           return _buildProfileTab();
         default:
@@ -2205,18 +2828,18 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // ================= OWNER DASHBOARD (inDrive / Host Mode) =================
+  // ================= OWNER DASHBOARD (Host Mode) =================
   Widget _buildOwnerDashboard() {
-    final myCars = allCarsList.where((car) => car.isUserCar).toList();
-    // In demo/single-device mode, if host listed cars, filter to those; otherwise show all bookings for easy testing
-    final hostBookings = myCars.isEmpty
-        ? userBookingsList
-        : userBookingsList.where((b) {
-            return b.car.isUserCar ||
-                myCars.any((c) =>
-                    c.id == b.car.id ||
-                    c.name.toLowerCase() == b.car.name.toLowerCase());
-          }).toList();
+    final currentHost = _currentUserEmail;
+    final myCars = allCarsList.where((car) =>
+        (activeUserId.isNotEmpty && car.ownerId == activeUserId) ||
+        car.ownerEmail.trim().toLowerCase() == currentHost).toList();
+    final hostBookings = userBookingsList.where((b) {
+      if (activeUserId.isNotEmpty && b.ownerId.isNotEmpty && b.ownerId == activeUserId) return true;
+      final carOwner = b.car.ownerEmail.trim().toLowerCase();
+      if (carOwner.isNotEmpty && carOwner == currentHost) return true;
+      return myCars.any((c) => c.id == b.car.id);
+    }).toList();
 
     final confirmedOrCompleted = hostBookings
         .where((b) => b.status == "Confirmed" || b.status == "In Progress" || b.status == "Completed")
@@ -2229,12 +2852,20 @@ class _HomePageState extends State<HomePage> {
     final pendingBookings =
         hostBookings.where((b) => b.status == "Pending").toList();
 
-    return SingleChildScrollView(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+    return RefreshIndicator(
+      color: AppTheme.primary,
+      backgroundColor: const Color(0xFF1E1E1E),
+      onRefresh: () async {
+        await FirestoreService.syncBookingsWithFirestore();
+        if (mounted) setState(() {});
+      },
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
             // ================= HOST BANNER =================
             Container(
               width: double.infinity,
@@ -2668,6 +3299,7 @@ class _HomePageState extends State<HomePage> {
                                       booking.status = "Declined";
                                       saveBookingsToLocalStorage();
                                     });
+                                    FirestoreService.updateBookingStatusInFirestore(booking.id, "Declined");
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
                                         content: Text("Booking request declined"),
@@ -2701,6 +3333,7 @@ class _HomePageState extends State<HomePage> {
                                       booking.status = "Confirmed";
                                       saveBookingsToLocalStorage();
                                     });
+                                    FirestoreService.updateBookingStatusInFirestore(booking.id, "Confirmed");
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
                                         content: Text(
@@ -2732,74 +3365,149 @@ class _HomePageState extends State<HomePage> {
                           const SizedBox(height: 10),
                           const Divider(color: Colors.white10),
                           const SizedBox(height: 4),
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              onPressed: () {
-                                setState(() {
-                                  booking.status = "In Progress";
-                                  saveBookingsToLocalStorage();
-                                });
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                        "Keys handed over for ${booking.car.name}! Trip is now In Progress."),
-                                    backgroundColor: Colors.cyan.shade800,
-                                  ),
-                                );
+                          if (booking.inspectionStatus == "owner_confirmed")
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: () {
+                                  setState(() {
+                                    booking.status = "In Progress";
+                                    saveBookingsToLocalStorage();
+                                  });
+                                  FirestoreService.updateBookingStatusInFirestore(booking.id, "In Progress");
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                          "Keys handed over for ${booking.car.name}! Trip is now In Progress."),
+                                      backgroundColor: Colors.cyan.shade800,
+                                    ),
+                                  );
+                                },
+                                icon: const Icon(Icons.key,
+                                    size: 16, color: Colors.white),
+                                label: const Text("Handover Keys & Start Trip",
+                                    style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 13)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.cyan.shade800,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10)),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 8),
+                                ),
+                              ),
+                            )
+                          else
+                            InkWell(
+                              onTap: () {
+                                setState(() => _currentIndex = 1); // Switch to Bookings Hub
                               },
-                              icon: const Icon(Icons.key,
-                                  size: 16, color: Colors.white),
-                              label: const Text("Handover Keys & Start Trip",
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13)),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.cyan.shade800,
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10)),
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 8),
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.hourglass_top, color: Colors.amber, size: 16),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        booking.preTripInspection != null || booking.inspectionStatus == "customer_submitted"
+                                            ? "Renter submitted pre-trip inspection. Review & approve in Bookings Hub to unlock handover."
+                                            : "Awaiting renter pre-trip inspection before key handover.",
+                                        style: const TextStyle(color: Colors.amber, fontSize: 11),
+                                      ),
+                                    ),
+                                    const Icon(Icons.chevron_right, color: Colors.amber, size: 16),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                        ] else if (booking.status == "In Progress") ...[
+                        ] else if (booking.status == "In Progress" || booking.status == "Return Pending") ...[
                           const SizedBox(height: 10),
                           const Divider(color: Colors.white10),
                           const SizedBox(height: 4),
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              onPressed: () {
-                                setState(() {
-                                  booking.status = "Completed";
-                                  saveBookingsToLocalStorage();
-                                });
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                        "Trip completed! Rs. ${booking.totalPrice} credited to earnings."),
-                                    backgroundColor: AppTheme.primary,
-                                  ),
-                                );
+                          if (booking.returnInspectionStatus == "confirmed")
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: () async {
+                                  setState(() {
+                                    booking.status = "Completed";
+                                    saveBookingsToLocalStorage();
+                                  });
+                                  await FirestoreService.updateBookingStatusInFirestore(booking.id, "Completed");
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                            "Trip completed! Rs. ${booking.totalPrice} credited to earnings."),
+                                        backgroundColor: AppTheme.primary,
+                                      ),
+                                    );
+                                  }
+                                },
+                                icon: const Icon(Icons.task_alt,
+                                    size: 16, color: Colors.white),
+                                label: const Text("Mark Trip Completed",
+                                    style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 13)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppTheme.primary,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10)),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 8),
+                                ),
+                              ),
+                            )
+                          else
+                            InkWell(
+                              onTap: () {
+                                setState(() => _currentIndex = 1); // Switch to Bookings Hub
                               },
-                              icon: const Icon(Icons.task_alt,
-                                  size: 16, color: Colors.white),
-                              label: const Text("Mark Trip Completed",
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13)),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppTheme.primary,
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10)),
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 8),
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: (booking.returnInspectionStatus == "submitted" ? Colors.amber : Colors.cyan).withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: (booking.returnInspectionStatus == "submitted" ? Colors.amber : Colors.cyan).withValues(alpha: 0.4)),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      booking.returnInspectionStatus == "submitted" ? Icons.assignment_turned_in : Icons.directions_car,
+                                      color: booking.returnInspectionStatus == "submitted" ? Colors.amber : Colors.cyanAccent,
+                                      size: 16,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        booking.returnInspectionStatus == "submitted"
+                                            ? "Renter submitted return inspection. Review & approve in Bookings Hub to complete trip."
+                                            : "Trip in progress. Return inspection required before completion.",
+                                        style: TextStyle(
+                                          color: booking.returnInspectionStatus == "submitted" ? Colors.amber : Colors.cyanAccent,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ),
+                                    const Icon(Icons.chevron_right, color: Colors.grey, size: 16),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
                         ] else if (booking.status == "Completed") ...[
                           const SizedBox(height: 8),
                           Container(
@@ -2810,16 +3518,27 @@ class _HomePageState extends State<HomePage> {
                               color: Colors.green.withOpacity(0.08),
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: const Row(
+                            child: Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Icon(Icons.check_circle,
-                                    color: Colors.green, size: 14),
-                                SizedBox(width: 6),
+                                Icon(
+                                  booking.paymentStatus == "Paid"
+                                      ? Icons.check_circle
+                                      : Icons.pending_actions,
+                                  color: booking.paymentStatus == "Paid"
+                                      ? Colors.green
+                                      : Colors.amber,
+                                  size: 14,
+                                ),
+                                const SizedBox(width: 6),
                                 Text(
-                                  "Trip Completed • Payment Received",
+                                  booking.paymentStatus == "Paid"
+                                      ? "Trip Completed • Payment Received"
+                                      : "Trip Completed • Payment Pending",
                                   style: TextStyle(
-                                      color: Colors.green,
+                                      color: booking.paymentStatus == "Paid"
+                                          ? Colors.green
+                                          : Colors.amber,
                                       fontSize: 11,
                                       fontWeight: FontWeight.w600),
                                 ),
@@ -2949,7 +3668,10 @@ class _HomePageState extends State<HomePage> {
                     ElevatedButton.icon(
                       onPressed: () {
                         if (!_requireLogin(action: "list a car in your fleet")) return;
-                        setState(() => _currentIndex = 3); // Add Car
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const AddCar()),
+                        );
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppTheme.primary,
@@ -3002,12 +3724,35 @@ class _HomePageState extends State<HomePage> {
                           const SizedBox(height: 4),
                           Row(
                             children: [
-                              const Icon(Icons.check_circle, color: Colors.green, size: 14),
-                              const SizedBox(width: 4),
-                              const Text(
-                                "Active",
-                                style: TextStyle(color: Colors.green, fontSize: 12, fontWeight: FontWeight.bold),
-                              ),
+                              if (car.approvalStatus == "approved") ...[
+                                const Icon(Icons.check_circle, color: Colors.green, size: 14),
+                                const SizedBox(width: 4),
+                                const Text(
+                                  "Active",
+                                  style: TextStyle(color: Colors.green, fontSize: 12, fontWeight: FontWeight.bold),
+                                ),
+                              ] else if (car.approvalStatus == "pending_update") ...[
+                                const Icon(Icons.update, color: Colors.orangeAccent, size: 14),
+                                const SizedBox(width: 4),
+                                const Text(
+                                  "Update Pending",
+                                  style: TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                                ),
+                              ] else if (car.approvalStatus == "rejected") ...[
+                                const Icon(Icons.error_outline, color: Colors.redAccent, size: 14),
+                                const SizedBox(width: 4),
+                                const Text(
+                                  "Needs Revision",
+                                  style: TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                                ),
+                              ] else ...[
+                                const Icon(Icons.hourglass_top, color: Colors.amber, size: 14),
+                                const SizedBox(width: 4),
+                                const Text(
+                                  "Pending Approval",
+                                  style: TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
+                                ),
+                              ],
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
@@ -3082,6 +3827,7 @@ class _HomePageState extends State<HomePage> {
           ],
         ),
       ),
+    ),
     );
   }
 
@@ -3201,6 +3947,59 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Widget _buildCustomerFilterChip(String label, String filterKey, int count, Color color) {
+    final isSelected = _selectedCustomerBookingFilter.toLowerCase() == filterKey.toLowerCase();
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: FilterChip(
+        selected: isSelected,
+        label: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? Colors.black : Colors.white70,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.black26 : color.withOpacity(0.25),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                "$count",
+                style: TextStyle(
+                  color: isSelected ? Colors.black : color,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 11,
+                ),
+              ),
+            ),
+          ],
+        ),
+        selectedColor: color,
+        backgroundColor: const Color(0xFF1E1E1E),
+        side: BorderSide(
+          color: isSelected ? color : Colors.white12,
+          width: 1.2,
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        onSelected: (selected) {
+          if (selected) {
+            setState(() {
+              _selectedCustomerBookingFilter = filterKey;
+            });
+          }
+        },
+      ),
+    );
+  }
+
   Widget _buildBookingStatusBadge(String status) {
     Color color;
     IconData icon;
@@ -3264,8 +4063,17 @@ class _HomePageState extends State<HomePage> {
   Widget _buildHomeFeed() {
     final cars = _filteredCars;
 
-    return SingleChildScrollView(
-      child: Padding(
+    return RefreshIndicator(
+      color: AppTheme.primary,
+      backgroundColor: const Color(0xFF1E1E1E),
+      onRefresh: () async {
+        await FirestoreService.syncCarsWithFirestore();
+        await loadCarsFromLocalStorage();
+        if (mounted) setState(() {});
+      },
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -4006,8 +4814,9 @@ class _HomePageState extends State<HomePage> {
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   // ================= TAB 1: EXPLORE TAB =================
   Widget _buildExploreTab() {
@@ -4290,10 +5099,37 @@ class _HomePageState extends State<HomePage> {
     }
 
     final currentUserEmail = _currentUserEmail;
-    final myBookings = userBookingsList.where((b) {
-      if (b.customerEmail.isEmpty) return true; // legacy/demo entries
+    final allMyBookings = userBookingsList.where((b) {
       return b.customerEmail.trim().toLowerCase() == currentUserEmail;
     }).toList();
+
+    final activeBookings = allMyBookings.where((b) {
+      final s = b.status.trim().toLowerCase();
+      return s == "pending" || s == "confirmed" || s == "in progress" || s == "return pending";
+    }).toList();
+
+    final completedBookings = allMyBookings.where((b) => b.status.trim().toLowerCase() == "completed").toList();
+    final cancelledBookings = allMyBookings.where((b) {
+      final s = b.status.trim().toLowerCase();
+      return s == "cancelled" || s == "declined";
+    }).toList();
+
+    List<BookingItem> displayedBookings;
+    switch (_selectedCustomerBookingFilter) {
+      case "Completed":
+        displayedBookings = completedBookings;
+        break;
+      case "Cancelled":
+        displayedBookings = cancelledBookings;
+        break;
+      case "All":
+        displayedBookings = allMyBookings;
+        break;
+      case "Active":
+      default:
+        displayedBookings = activeBookings;
+        break;
+    }
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -4319,7 +5155,7 @@ class _HomePageState extends State<HomePage> {
                   border: Border.all(color: AppTheme.primary),
                 ),
                 child: Text(
-                  "${myBookings.length} Active",
+                  "${activeBookings.length} Active",
                   style: const TextStyle(
                     color: AppTheme.primaryLight,
                     fontWeight: FontWeight.bold,
@@ -4329,28 +5165,67 @@ class _HomePageState extends State<HomePage> {
               ),
             ],
           ),
+          const SizedBox(height: 12),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _buildCustomerFilterChip("Active", "Active", activeBookings.length, Colors.cyan),
+                _buildCustomerFilterChip("Completed", "Completed", completedBookings.length, Colors.green),
+                _buildCustomerFilterChip("Cancelled", "Cancelled", cancelledBookings.length, Colors.redAccent),
+                _buildCustomerFilterChip("All", "All", allMyBookings.length, AppTheme.primary),
+              ],
+            ),
+          ),
           const SizedBox(height: 14),
           Expanded(
-            child: myBookings.isEmpty
+            child: displayedBookings.isEmpty
                 ? Center(
                     child: Padding(
                       padding: const EdgeInsets.all(24),
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.calendar_month_outlined, size: 60, color: Colors.grey),
+                          Icon(
+                            _selectedCustomerBookingFilter == "Completed"
+                                ? Icons.task_alt
+                                : (_selectedCustomerBookingFilter == "Cancelled"
+                                    ? Icons.cancel_outlined
+                                    : Icons.calendar_month_outlined),
+                            size: 60,
+                            color: Colors.grey,
+                          ),
                           const SizedBox(height: 14),
-                          const Text(
-                            "No Rental Bookings Found",
-                            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                          Text(
+                            _selectedCustomerBookingFilter == "Completed"
+                                ? "No Completed Bookings"
+                                : (_selectedCustomerBookingFilter == "Cancelled"
+                                    ? "No Cancelled Bookings"
+                                    : "No Active Bookings"),
+                            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                           ),
                           const SizedBox(height: 8),
-                          const Text(
-                            "You haven't requested any cars yet. Browse our catalog and send a rental request!",
+                          Text(
+                            _selectedCustomerBookingFilter == "Active"
+                                ? (completedBookings.isNotEmpty
+                                    ? "You have completed rentals available in the Completed tab."
+                                    : "You don't have any ongoing or upcoming rentals. Browse cars to book one!")
+                                : (_selectedCustomerBookingFilter == "Completed"
+                                    ? "Your finished trips will appear here once returned and verified."
+                                    : "No cancelled or declined booking requests."),
                             textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey, fontSize: 13),
+                            style: const TextStyle(color: Colors.grey, fontSize: 13),
                           ),
                           const SizedBox(height: 18),
+                          if (_selectedCustomerBookingFilter == "Active" && completedBookings.isNotEmpty) ...[
+                            ElevatedButton.icon(
+                              onPressed: () => setState(() => _selectedCustomerBookingFilter = "Completed"),
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700),
+                              icon: const Icon(Icons.history, color: Colors.white),
+                              label: const Text("View Completed Trips", style: TextStyle(color: Colors.white)),
+                            ),
+                            const SizedBox(height: 10),
+                          ],
                           ElevatedButton.icon(
                             onPressed: () => setState(() => _currentIndex = 0),
                             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
@@ -4369,9 +5244,9 @@ class _HomePageState extends State<HomePage> {
                       setState(() {});
                     },
                     child: ListView.builder(
-                    itemCount: myBookings.length,
+                    itemCount: displayedBookings.length,
                     itemBuilder: (context, index) {
-                      final booking = myBookings[index];
+                      final booking = displayedBookings[index];
                       return Container(
                   margin: const EdgeInsets.only(bottom: 14),
                   decoration: BoxDecoration(
@@ -4552,17 +5427,89 @@ class _HomePageState extends State<HomePage> {
                                 if (booking.status != "In Progress")
                                   TextButton.icon(
                                     onPressed: () {
-                                      setState(() {
-                                        userBookingsList.removeAt(index);
-                                        saveBookingsToLocalStorage();
-                                      });
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: Text(booking.status == "Declined" ||
-                                                  booking.status == "Completed"
-                                              ? "Booking removed from history"
-                                              : "Booking cancelled successfully"),
-                                          backgroundColor: Colors.redAccent,
+                                      final isRemove = booking.status == "Declined" || booking.status == "Completed";
+                                      final titleText = isRemove ? "Remove Booking Record?" : "Cancel Booking Request?";
+                                      final contentText = isRemove
+                                          ? "Are you sure you want to remove this booking from your history?"
+                                          : "Are you sure you want to cancel your booking for ${booking.car.name}? The vehicle dates will be unlocked for rental.";
+                                      final actionText = isRemove ? "Remove" : "Cancel Booking";
+
+                                      showDialog(
+                                        context: context,
+                                        builder: (ctx) => AlertDialog(
+                                          backgroundColor: const Color(0xFF1E1E1E),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(16),
+                                            side: const BorderSide(color: Colors.white10),
+                                          ),
+                                          title: Row(
+                                            children: [
+                                              Icon(
+                                                isRemove ? Icons.delete_outline : Icons.cancel_outlined,
+                                                color: Colors.redAccent,
+                                                size: 22,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                titleText,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 18,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          content: Text(
+                                            contentText,
+                                            style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(ctx),
+                                              child: const Text("Keep Booking", style: TextStyle(color: Colors.grey)),
+                                            ),
+                                            ElevatedButton(
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: Colors.redAccent,
+                                                foregroundColor: Colors.white,
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius: BorderRadius.circular(8),
+                                                ),
+                                              ),
+                                              onPressed: () async {
+                                                Navigator.pop(ctx);
+                                                if (isRemove) {
+                                                  setState(() {
+                                                    userBookingsList.removeWhere((b) => b.id == booking.id);
+                                                    saveBookingsToLocalStorage();
+                                                  });
+                                                   FirestoreService.deleteBookingFromFirestore(booking.id);
+                                                } else {
+                                                  setState(() {
+                                                    booking.status = "Cancelled";
+                                                  });
+                                                  await saveBookingsToLocalStorage();
+                                                  await FirestoreService.updateBookingStatusInFirestore(booking.id, "Cancelled");
+                                                }
+                                                if (mounted) {
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(isRemove
+                                                          ? "Booking removed from history"
+                                                          : "Booking cancelled successfully. Car is unlocked."),
+                                                      backgroundColor: Colors.redAccent,
+                                                      behavior: SnackBarBehavior.floating,
+                                                    ),
+                                                  );
+                                                }
+                                              },
+                                              child: Text(
+                                                actionText,
+                                                style: const TextStyle(fontWeight: FontWeight.bold),
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       );
                                     },
@@ -4655,7 +5602,7 @@ class _HomePageState extends State<HomePage> {
           ),
           const SizedBox(height: 14),
           Text(
-            widget.name.isNotEmpty ? widget.name : "User Name",
+            _currentUserName,
             style: const TextStyle(
               color: Colors.white,
               fontSize: 22,
@@ -4664,7 +5611,7 @@ class _HomePageState extends State<HomePage> {
           ),
           const SizedBox(height: 4),
           Text(
-            widget.email.isNotEmpty ? widget.email : "user@example.com",
+            _currentUserEmail,
             style: const TextStyle(color: Colors.grey, fontSize: 14),
           ),
           const SizedBox(height: 10),
@@ -4696,7 +5643,13 @@ class _HomePageState extends State<HomePage> {
             _buildProfileOption(
               icon: Icons.verified_user_outlined,
               title: "CNIC & License Verification",
-              subtitle: currentUserVerification.isVerified ? "✅ Verified Renter Shield Active" : "Upload CNIC & Driving License for instant booking",
+              subtitle: currentUserVerification.isVerified
+                  ? "✅ Verified"
+                  : (currentUserVerification.isPending
+                      ? "⏳ Verification Pending"
+                      : (currentUserVerification.isRejected
+                          ? "❌ Verification Rejected"
+                          : "Upload CNIC & Driving License for instant booking")),
               onTap: () {
                 if (widget.isGuest) {
                   _requireLogin(action: "verify your identity");
@@ -4704,7 +5657,7 @@ class _HomePageState extends State<HomePage> {
                 }
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => const VerificationScreen()),
+                  MaterialPageRoute(builder: (context) => const VerificationScreen(isOwner: false)),
                 ).then((_) => setState(() {}));
               },
             ),
@@ -4727,7 +5680,7 @@ class _HomePageState extends State<HomePage> {
             _buildProfileOption(
               icon: Icons.calendar_month,
               title: "My Rental Bookings",
-              subtitle: "${userBookingsList.length} active bookings",
+              subtitle: "${userBookingsList.where((b) => b.customerEmail.trim().toLowerCase() == _currentUserEmail && b.isScheduleBlocking).length} active bookings",
               onTap: () {
                 setState(() => _currentIndex = 2);
               },
@@ -4761,9 +5714,9 @@ class _HomePageState extends State<HomePage> {
           ] else ...[
             // OWNER (HOST) ONLY
             _buildProfileOption(
-              icon: Icons.account_balance,
-              title: "Earnings & Bank Payout",
-              subtitle: "Meezan / HBL Bank (IBAN), JazzCash & withdrawal ledger",
+              icon: Icons.payments_outlined,
+              title: "Payment Details",
+              subtitle: "Manage Bank Account (IBAN), Easypaisa & JazzCash",
               onTap: () {
                 Navigator.push(
                   context,
@@ -4774,18 +5727,24 @@ class _HomePageState extends State<HomePage> {
             _buildProfileOption(
               icon: Icons.verified_user_outlined,
               title: "Host Identity Verification",
-              subtitle: currentUserVerification.isVerified ? "✅ Verified Host Status Active" : "Verify CNIC to list vehicles with priority",
+              subtitle: currentUserVerification.isVerified
+                  ? "✅ Verified"
+                  : (currentUserVerification.isPending
+                      ? "⏳ Verification Pending"
+                      : (currentUserVerification.isRejected
+                          ? "❌ Verification Rejected"
+                          : "Verify CNIC to list vehicles with priority")),
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => const VerificationScreen()),
+                  MaterialPageRoute(builder: (context) => const VerificationScreen(isOwner: true)),
                 ).then((_) => setState(() {}));
               },
             ),
             _buildProfileOption(
               icon: Icons.directions_car,
               title: "My Listed Fleet",
-              subtitle: "${allCarsList.where((c) => c.isUserCar).length} vehicles in fleet",
+              subtitle: "${allCarsList.where((c) => c.ownerEmail.trim().toLowerCase() == _currentUserEmail).length} vehicles in fleet",
               onTap: () {
                 setState(() => _currentIndex = 2);
               },
@@ -4794,6 +5753,17 @@ class _HomePageState extends State<HomePage> {
               icon: Icons.add_circle_outline,
               title: "Add a New Car",
               subtitle: "List another vehicle for rent",
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AddCar()),
+                );
+              },
+            ),
+            _buildProfileOption(
+              icon: Icons.chat_bubble_outline,
+              title: "Messages",
+              subtitle: "Chat with renters and answer inquiries",
               onTap: () {
                 setState(() => _currentIndex = 3);
               },
@@ -4836,31 +5806,103 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(height: 20),
           SizedBox(
             width: double.infinity,
-            height: 50,
+            height: 52,
             child: ElevatedButton.icon(
               onPressed: () async {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: const Color(0xFF1E1E1E),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: const BorderSide(color: Colors.white10),
+                    ),
+                    title: const Row(
+                      children: [
+                        Icon(Icons.logout_rounded, color: AppTheme.primary, size: 22),
+                        SizedBox(width: 10),
+                        Text(
+                          "Confirm Logout",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    content: const Text(
+                      "Are you sure you want to log out of your account?",
+                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                      ),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.primary,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: const Text(
+                          "Logout",
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+
+                if (confirm != true) return;
+
+                _verificationSub?.cancel();
                 await AuthService().signOut();
-                if (!context.mounted) return;
+                name = "";
+                email = "";
+                activeUserEmail = "";
+                activeUserName = "";
+                activeUserId = "";
+                activeUserRole = "customer";
+                favoriteCarIds.clear();
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.remove("app_user_active_email");
+                await prefs.remove("app_user_active_name");
+                await prefs.remove("app_user_active_id");
+                await prefs.remove("app_user_role");
+                await prefs.remove("app_user_is_owner_mode");
+                if (!mounted) return;
                 Navigator.pushAndRemoveUntil(
                   context,
                   MaterialPageRoute(builder: (context) => const LoginPage()),
                   (route) => false,
                 );
               },
+              icon: const Icon(Icons.logout_rounded, color: Colors.white, size: 20),
+              label: const Text(
+                "Logout",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
+                ),
+              ),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.redAccent,
+                backgroundColor: AppTheme.primary,
                 foregroundColor: Colors.white,
+                elevation: 2,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              icon: const Icon(Icons.logout),
-              label: const Text(
-                "Logout",
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
             ),
           ),
+          const SizedBox(height: 24),
         ],
       ),
     );

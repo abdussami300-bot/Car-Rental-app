@@ -1,0 +1,276 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isUser(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function isEmail(email) {
+      return isAuthenticated() && 
+        request.auth.token.email != null && 
+        request.auth.token.email.lower() == email.lower();
+    }
+
+    function isUserOrEmail(uid, email) {
+      return (uid != null && uid != "" && isUser(uid)) ||
+             (email != null && email != "" && isEmail(email));
+    }
+
+    function isBookingCustomer(data) {
+      return isUserOrEmail(data.customerId, data.customerEmail);
+    }
+
+    function isBookingOwner(data) {
+      return isUserOrEmail(data.ownerId, data.car.ownerEmail);
+    }
+
+    function isBookingParticipant(data) {
+      return isBookingCustomer(data) || isBookingOwner(data);
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+    }
+
+    // ==========================================
+    // 1. USERS COLLECTION
+    // ==========================================
+    match /users/{userId} {
+      // Account owner and Admins can read the user document.
+      // Other authenticated users can only read Host/Admin profiles to render host names and verified badges.
+      allow read: if isUser(userId) || isAdmin() || (isAuthenticated() && resource.data.role in ['owner', 'admin']);
+
+      // Users can only create their own profile initially (non-admin role, non-verified status)
+      allow create: if isUser(userId) &&
+        (!('role' in request.resource.data) || request.resource.data.role in ['customer', 'owner']) &&
+        (!('verificationStatus' in request.resource.data) || request.resource.data.verificationStatus in ['unverified', 'pending']) &&
+        (!('isVerified' in request.resource.data) || request.resource.data.isVerified == false);
+
+      // Admins can update any user's verification status
+      // Normal users can only update their own profile and submit documents as 'pending', but CANNOT self-approve
+      allow update: if isAdmin() || (
+        isUser(userId) &&
+        (!('role' in request.resource.data) || request.resource.data.role in ['customer', 'owner']) &&
+        (!('verificationStatus' in request.resource.data) || request.resource.data.verificationStatus in ['unverified', 'pending']) &&
+        (!('isVerified' in request.resource.data) || request.resource.data.isVerified == false || request.resource.data.isVerified == resource.data.isVerified) &&
+        (!('isHostVerified' in request.resource.data) || request.resource.data.isHostVerified == false || request.resource.data.isHostVerified == resource.data.isHostVerified)
+      );
+
+      allow delete: if false; // User accounts cannot be deleted directly via client
+    }
+
+    // ==========================================
+    // 2. CARS COLLECTION
+    // ==========================================
+    match /cars/{carId} {
+      // Cars can be browsed by all authenticated users (or guests)
+      allow read: if true;
+
+      // Only authenticated users can list cars for themselves with mandatory vehicle photos
+      allow create: if isAuthenticated() &&
+        (isUser(request.resource.data.ownerId) || isEmail(request.resource.data.ownerEmail)) &&
+        request.resource.data.image != null &&
+        request.resource.data.image != "" &&
+        request.resource.data.image != "images/car.webp";
+
+      // Vehicle owner or Admin can edit or delete car
+      // Prevent transferring car ownership to another user directly
+      allow update: if isAuthenticated() &&
+        (isAdmin() || ((isUser(resource.data.ownerId) || isEmail(resource.data.ownerEmail)) &&
+        (request.resource.data.ownerId == resource.data.ownerId || resource.data.ownerId == "") &&
+        (request.resource.data.ownerEmail.lower() == resource.data.ownerEmail.lower() || resource.data.ownerEmail == "")));
+
+      allow delete: if isAuthenticated() &&
+        (isAdmin() || isUser(resource.data.ownerId) || isEmail(resource.data.ownerEmail));
+    }
+
+    // ==========================================
+    // 3. BOOKINGS COLLECTION
+    // ==========================================
+    match /bookings/{bookingId} {
+      // Customer and Owner associated with this booking can read it, as well as Admins
+      allow read: if isAuthenticated() && (isAdmin() || isBookingParticipant(resource.data));
+
+      // Booking Creation Rules:
+      // 1. Must be authenticated
+      // 2. Customer creating booking must be the authenticated user
+      // 3. CANNOT rent own vehicle: customerId != ownerId AND customerEmail != ownerEmail
+      // 4. Initial status must be "Pending"
+      allow create: if isAuthenticated() &&
+        isBookingCustomer(request.resource.data) &&
+        (request.resource.data.customerId == "" || request.resource.data.ownerId == "" || request.resource.data.customerId != request.resource.data.ownerId) &&
+        (request.resource.data.customerEmail.lower() != request.resource.data.car.ownerEmail.lower()) &&
+        request.resource.data.status == "Pending";
+
+      // Booking Update Rules (State machine validation):
+      allow update: if isAuthenticated() && isBookingParticipant(resource.data) && (
+        // A. Customer updates:
+        (isBookingCustomer(resource.data) &&
+          // Cannot modify owner-only state flags
+          request.resource.data.registrationCardHandedOver == resource.data.registrationCardHandedOver &&
+          // Cannot force trip into "In Progress" or "Completed"
+          !(request.resource.data.status in ["In Progress", "Completed"]) &&
+          // Customer can cancel a pending booking
+          (request.resource.data.status == "Cancelled" ||
+           // Customer confirms pre-trip inspection
+           (request.resource.data.inspectionStatus == "customer_confirmed" && resource.data.status == "Confirmed") ||
+           // Customer submits return inspection
+           (request.resource.data.returnInspectionStatus == "submitted" && request.resource.data.status == "Return Pending" && resource.data.status == "In Progress") ||
+           // Keep status intact while updating inspection details
+           request.resource.data.status == resource.data.status)
+        ) ||
+
+        // B. Owner updates:
+        (isBookingOwner(resource.data) &&
+          // Cannot modify customer identity
+          request.resource.data.customerEmail == resource.data.customerEmail &&
+          // Owner accepting or declining request:
+          ((request.resource.data.status in ["Confirmed", "Declined"] && resource.data.status == "Pending") ||
+           // Owner handing over keys: ONLY allowed IF customer confirmed pre-trip inspection AND payment is cleared
+           (request.resource.data.status == "In Progress" &&
+            resource.data.status == "Confirmed" &&
+            resource.data.inspectionStatus == "customer_confirmed" &&
+            resource.data.paymentStatus == "Paid") ||
+           // Owner completing trip: ONLY allowed IF return inspection is confirmed by owner AND payment is cleared
+           (request.resource.data.status == "Completed" &&
+            request.resource.data.returnInspectionStatus == "confirmed" &&
+            (resource.data.status in ["In Progress", "Return Pending"]) &&
+            resource.data.paymentStatus == "Paid") ||
+           // Owner updating return review state or payment status
+           request.resource.data.status == resource.data.status)
+        )
+      );
+
+      // Only booking participants can delete their records
+      allow delete: if isAuthenticated() && isBookingParticipant(resource.data);
+
+      // Embedded inspections subcollection inside booking
+      match /inspections/{inspectionId} {
+        allow read: if isAuthenticated() && isBookingParticipant(get(/databases/$(database)/documents/bookings/$(bookingId)).data);
+        allow create: if isAuthenticated() && isBookingCustomer(get(/databases/$(database)/documents/bookings/$(bookingId)).data);
+        allow update: if isAuthenticated() && isBookingParticipant(get(/databases/$(database)/documents/bookings/$(bookingId)).data);
+        allow delete: if false;
+      }
+    }
+
+    // ==========================================
+    // 3.5. PUBLIC VEHICLE SCHEDULES (Anonymous availability ranges for calendar blocking)
+    // ==========================================
+    match /car_schedules/{scheduleId} {
+      // Anyone can read schedule date ranges so the calendar blocks booked dates
+      allow read: if true;
+      // Authenticated users can create or update schedule ranges during booking
+      allow create: if isAuthenticated() &&
+        request.resource.data.carId != null &&
+        request.resource.data.startDate != null &&
+        request.resource.data.endDate != null;
+      allow update: if isAuthenticated();
+      allow delete: if isAuthenticated();
+    }
+
+    // ==========================================
+    // 4. STANDALONE INSPECTIONS COLLECTION
+    // ==========================================
+    match /inspections/{inspectionId} {
+      // Read: only customer OR owner associated with the booking
+      allow read: if isAuthenticated() && (
+        isUserOrEmail(resource.data.customerId, resource.data.customerEmail) ||
+        isUserOrEmail(resource.data.ownerId, resource.data.ownerEmail)
+      );
+
+      // Create: only the customer associated with the booking
+      allow create: if isAuthenticated() && (
+        isUserOrEmail(request.resource.data.customerId, request.resource.data.customerEmail)
+      );
+
+      // Update:
+      // - Customer can submit/confirm their inspection
+      // - Owner can review/confirm return inspection
+      // - Neither party can modify another booking's inspection
+      allow update: if isAuthenticated() &&
+        request.resource.data.bookingId == resource.data.bookingId && (
+          // Customer submitting / confirming inspection
+          (isUserOrEmail(resource.data.customerId, resource.data.customerEmail) &&
+           request.resource.data.status in ["customer_confirmed", "return_submitted"]) ||
+          // Owner reviewing / confirming return inspection
+          (isUserOrEmail(resource.data.ownerId, resource.data.ownerEmail) &&
+           request.resource.data.status in ["owner_reviewed", "return_confirmed"])
+        );
+
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // 5. CHAT MESSAGES COLLECTION
+    // ==========================================
+    match /messages/{messageId} {
+      // Read: only participants in this conversation
+      allow read: if isAuthenticated() && (
+        isUserOrEmail(resource.data.senderId, resource.data.senderEmail) ||
+        isUserOrEmail(resource.data.ownerId, resource.data.ownerEmail) ||
+        isUserOrEmail(resource.data.customerId, resource.data.customerEmail)
+      );
+
+      // Write: sender must be authenticated user (or automated host initial reply)
+      allow create: if isAuthenticated() && (
+        isUserOrEmail(request.resource.data.senderId, request.resource.data.senderEmail) ||
+        request.resource.data.isAutomated == true
+      );
+
+      allow update: if isAuthenticated() && (
+        // Allow marking message as read by receiver
+        isUserOrEmail(resource.data.ownerId, resource.data.ownerEmail) ||
+        isUserOrEmail(resource.data.customerId, resource.data.customerEmail)
+      );
+
+      allow delete: if isAuthenticated() && isUserOrEmail(resource.data.senderId, resource.data.senderEmail);
+    }
+
+    // ==========================================
+    // 6. REVIEWS COLLECTION
+    // ==========================================
+    match /reviews/{reviewId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+        (isUser(request.resource.data.userId) || isEmail(request.resource.data.userEmail));
+      allow update, delete: if isAuthenticated() &&
+        (isUser(resource.data.userId) || isEmail(resource.data.userEmail));
+    }
+
+    // ==========================================
+    // 7. USER FAVORITES COLLECTION
+    // ==========================================
+    match /user_favorites/{userEmail} {
+      allow read, write: if isAuthenticated() && (isEmail(userEmail) || isAdmin());
+    }
+
+    match /favorites/{favoriteId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // ==========================================
+    // 8. PAYOUT SETTINGS COLLECTION
+    // ==========================================
+    match /payout_settings/{hostEmail} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (isEmail(hostEmail) || isAdmin());
+    }
+
+    // ==========================================
+    // 9. WITHDRAWALS COLLECTION
+    // ==========================================
+    match /withdrawals/{withdrawalId} {
+      allow read: if isAuthenticated() && (isEmail(resource.data.userEmail) || isAdmin());
+      allow create: if isAuthenticated() && isEmail(request.resource.data.userEmail);
+      allow update, delete: if isAdmin();
+    }
+  }
+}

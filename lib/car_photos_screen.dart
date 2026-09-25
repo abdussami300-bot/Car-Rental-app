@@ -92,9 +92,9 @@ class _CarPhotosScreenState extends State<CarPhotosScreen> {
     try {
       final XFile? picked = await _picker.pickImage(
         source: source,
-        imageQuality: 85,
-        maxWidth: 1800,
-        maxHeight: 1800,
+        imageQuality: 65,
+        maxWidth: 900,
+        maxHeight: 900,
       );
 
       if (picked != null) {
@@ -263,6 +263,32 @@ class _CarPhotosScreenState extends State<CarPhotosScreen> {
         actions: [
           TextButton(
             onPressed: () {
+              if (count == 0) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: const Row(
+                      children: [
+                        Icon(Icons.info_outline, color: AppTheme.primaryLight, size: 20),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            "Please capture or select at least 1 photo before proceeding.",
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ),
+                    backgroundColor: const Color(0xFF1E2A32),
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(color: AppTheme.primary.withOpacity(0.6), width: 1),
+                    ),
+                    duration: const Duration(seconds: 3),
+                  ),
+                );
+                return;
+              }
               Navigator.pop(context, _photos);
             },
             child: const Text(
@@ -529,20 +555,46 @@ class _CarPhotosScreenState extends State<CarPhotosScreen> {
               height: 52,
               child: ElevatedButton.icon(
                 onPressed: () {
+                  if (count == 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: const Row(
+                          children: [
+                            Icon(Icons.info_outline, color: AppTheme.primaryLight, size: 20),
+                            SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                "Please capture or select at least 1 photo before proceeding.",
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
+                        backgroundColor: const Color(0xFF1E2A32),
+                        behavior: SnackBarBehavior.floating,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(color: AppTheme.primary.withOpacity(0.6), width: 1),
+                        ),
+                        duration: const Duration(seconds: 3),
+                      ),
+                    );
+                    return;
+                  }
                   Navigator.pop(context, _photos);
                 },
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: count > 0 ? AppTheme.primary : Colors.grey.shade800,
+                  backgroundColor: AppTheme.primary,
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14),
                   ),
                 ),
-                icon: const Icon(Icons.check_circle_outline, size: 20),
+                icon: Icon(count > 0 ? Icons.check_circle_outline : Icons.add_a_photo, size: 20),
                 label: Text(
                   count == _slots.length
                       ? "CONFIRM ALL 8 PHOTOS"
-                      : (count > 0 ? "SAVE $count CAPTURED PHOTOS" : "SAVE PHOTOS"),
+                      : (count > 0 ? "SAVE $count CAPTURED PHOTOS" : "CAPTURE VEHICLE PHOTOS"),
                   style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,

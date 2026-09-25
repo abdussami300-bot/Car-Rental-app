@@ -1,0 +1,93 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isUser(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // ==========================================
+    // 1. CAR PUBLIC PHOTOS
+    // ==========================================
+    match /cars/{carId}/{allPaths=**} {
+      // Car public showcase photos are viewable by any user
+      allow read: if true;
+
+      // Only authenticated users listing/editing their vehicle can upload car photos
+      allow write: if isAuthenticated() &&
+        request.resource.size < 10 * 1024 * 1024 && // max 10MB
+        request.resource.contentType.matches('image/.*');
+    }
+
+    // ==========================================
+    // 2. VEHICLE REGISTRATION DOCUMENTS (PRIVATE)
+    // ==========================================
+    match /car_documents/{carId}/{allPaths=**} {
+      // Sensitive government vehicle registration / ownership documents
+      // Only the vehicle owner or admin can read or write
+      allow read, write: if isAuthenticated() && (
+        isAdmin() ||
+        (firestore.exists(/databases/(default)/documents/cars/$(carId)) &&
+         (firestore.get(/databases/(default)/documents/cars/$(carId)).data.ownerId == request.auth.uid ||
+          (request.auth.token.email != null && firestore.get(/databases/(default)/documents/cars/$(carId)).data.ownerEmail != null &&
+           request.auth.token.email.lower() == firestore.get(/databases/(default)/documents/cars/$(carId)).data.ownerEmail.lower())))
+      );
+    }
+
+    // ==========================================
+    // 3. USER VERIFICATIONS (CNIC / LICENSE)
+    // ==========================================
+    match /verifications/{userId}/{allPaths=**} {
+      // Sensitive identification documents accessible by account owner or Admin
+      allow read: if isAuthenticated() && (isUser(userId) || isAdmin());
+      allow write: if isAuthenticated() && (isUser(userId) || isAdmin()) &&
+        (request.resource == null || (
+          request.resource.size < 10 * 1024 * 1024 &&
+          request.resource.contentType.matches('image/.*')
+        ));
+    }
+
+    // ==========================================
+    // 4. INSPECTION PHOTOS
+    // ==========================================
+    match /inspections/{bookingId}/{allPaths=**} {
+      function isBookingParticipant() {
+        let booking = firestore.get(/databases/(default)/documents/bookings/$(bookingId)).data;
+        return (booking.customerId != null && request.auth.uid == booking.customerId) ||
+               (booking.ownerId != null && request.auth.uid == booking.ownerId) ||
+               (request.auth.token.email != null && (
+                 (booking.customerEmail != null && request.auth.token.email.lower() == booking.customerEmail.lower()) ||
+                 (booking.car != null && booking.car.ownerEmail != null && request.auth.token.email.lower() == booking.car.ownerEmail.lower())
+               ));
+      }
+
+      // Read & Write: booking participants or Admin
+      allow read, write: if isAuthenticated() && (isAdmin() || isBookingParticipant()) &&
+        (request.resource == null || (
+          request.resource.size < 10 * 1024 * 1024 &&
+          request.resource.contentType.matches('image/.*')
+        ));
+    }
+
+    // ==========================================
+    // 5. PAYMENT PROOFS
+    // ==========================================
+    match /payment_proofs/{allPaths=**} {
+      allow read, write: if isAuthenticated() &&
+        (request.resource == null || (
+          request.resource.size < 10 * 1024 * 1024 &&
+          request.resource.contentType.matches('image/.*')
+        ));
+    }
+  }
+}

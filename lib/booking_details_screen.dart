@@ -4,6 +4,7 @@ import 'user_data.dart';
 import 'chat_screen.dart';
 import 'review_screen.dart';
 import 'vehicle_inspection_screen.dart';
+import 'firestore_service.dart';
 
 class BookingDetailsScreen extends StatefulWidget {
   final BookingItem booking;
@@ -13,8 +14,8 @@ class BookingDetailsScreen extends StatefulWidget {
   const BookingDetailsScreen({
     super.key,
     required this.booking,
-    this.currentUserEmail = "sami@example.com",
-    this.currentUserName = "Sami",
+    this.currentUserEmail = "",
+    this.currentUserName = "",
   });
 
   @override
@@ -35,11 +36,20 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
       context: context,
       builder: (dialogCtx) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text("Cancel Booking Request?", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Colors.white10),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.cancel_outlined, color: Colors.redAccent, size: 22),
+            SizedBox(width: 8),
+            Text("Cancel Booking Request?", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          ],
+        ),
         content: const Text(
           "Are you sure you want to cancel this booking? The vehicle will be released and you can request another car anytime.",
-          style: TextStyle(color: Colors.grey, fontSize: 13),
+          style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
         ),
         actions: [
           TextButton(
@@ -47,24 +57,30 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
             child: const Text("Keep Booking", style: TextStyle(color: Colors.grey)),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
             onPressed: () async {
               setState(() {
-                _booking.status = "Declined";
+                _booking.status = "Cancelled";
               });
               await saveBookingsToLocalStorage();
+              await FirestoreService.updateBookingStatusInFirestore(_booking.id, "Cancelled");
               if (dialogCtx.mounted) Navigator.pop(dialogCtx);
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text("Booking cancelled. Car is now unlocked in your catalog."),
                     backgroundColor: Colors.redAccent,
+                    behavior: SnackBarBehavior.floating,
                   ),
                 );
                 Navigator.pop(context, true);
               }
             },
-            child: const Text("Confirm Cancel"),
+            child: const Text("Confirm Cancel", style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -187,13 +203,13 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                         child: Icon(Icons.person, color: Colors.white, size: 28),
                       ),
                       const SizedBox(width: 12),
-                      const Expanded(
+                      Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text("Ali Raza (Host)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                            SizedBox(height: 2),
-                            Text("⭐ 4.9 Rating • 24 Trips Hosted", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                            Text(car.ownerEmail.isNotEmpty ? "Host (${car.ownerEmail})" : "Verified Host", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                            const SizedBox(height: 2),
+                            const Text("⭐ 4.9 Rating • Top Host", style: TextStyle(color: Colors.grey, fontSize: 12)),
                           ],
                         ),
                       ),
@@ -206,7 +222,7 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                         ),
                         onPressed: () {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text("Calling Host: +92 300 1234567")),
+                            const SnackBar(content: Text("Calling Host...")),
                           );
                         },
                         icon: const Icon(Icons.call, size: 16),
@@ -227,9 +243,15 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                               builder: (context) => ChatScreen(
                                 bookingId: _booking.id,
                                 carName: car.name,
-                                otherPartyName: "Host (Ali Raza)",
+                                otherPartyName: car.ownerEmail.isNotEmpty ? "Host (${car.ownerEmail})" : "Host",
                                 isHostViewing: false,
                                 currentUserEmail: widget.currentUserEmail,
+                                currentUserName: widget.currentUserName.isNotEmpty ? widget.currentUserName : (activeUserName.isNotEmpty ? activeUserName : name),
+                                carId: car.id,
+                                ownerEmail: car.ownerEmail,
+                                customerEmail: widget.currentUserEmail,
+                                ownerId: _booking.ownerId,
+                                customerId: _booking.customerId,
                               ),
                             ),
                           );
@@ -419,8 +441,8 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
               ),
             ],
 
-            // BOTTOM ACTION BUTTONS
-            if (status == "Completed")
+            // BOTTOM ACTION BUTTONS (Only for Renter/Customer, not Owner)
+            if (status == "Completed" && !car.isOwnedBy(widget.currentUserEmail) && !car.isOwnedByActiveUser && !(_booking.ownerId.isNotEmpty && _booking.ownerId == activeUserId))
               SizedBox(
                 width: double.infinity,
                 height: 50,
@@ -449,63 +471,120 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
               )
             else if (status == "Confirmed") ...[
               // Step 3 Handover Card for Renter
-              Container(
-                margin: const EdgeInsets.only(bottom: 12),
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.cyan.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.cyan.withValues(alpha: 0.5)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.key, color: Colors.cyanAccent, size: 20),
-                        SizedBox(width: 8),
-                        Text(
-                          "Step 3: Key Handover & Digital Inspection",
-                          style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 13),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      "Host approved! Meet host at pickup location, conduct digital vehicle inspection sheet (fuel & odometer), and sign off before starting trip.",
-                      style: TextStyle(color: Colors.white70, fontSize: 11, height: 1.3),
-                    ),
-                    const SizedBox(height: 10),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 44,
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.cyan.shade700,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                        onPressed: () async {
-                          final result = await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => VehicleInspectionScreen(
-                                booking: _booking,
-                                inspectionType: "Pre-Trip Handover",
-                                isReadOnly: false,
-                              ),
-                            ),
-                          );
-                          if (result == true) {
-                            setState(() {});
-                          }
-                        },
-                        icon: const Icon(Icons.fact_check, size: 18),
-                        label: const Text("Start Handover & Inspection", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+              Builder(
+                builder: (context) {
+                  final isConfirmed = _booking.inspectionStatus == "owner_confirmed";
+                  final isSubmitted = _booking.inspectionStatus == "customer_submitted" || (_booking.preTripInspection != null && !isConfirmed);
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: isConfirmed
+                          ? Colors.green.withValues(alpha: 0.12)
+                          : (isSubmitted ? Colors.amber.withValues(alpha: 0.12) : Colors.cyan.withValues(alpha: 0.12)),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: isConfirmed
+                            ? Colors.green.withValues(alpha: 0.5)
+                            : (isSubmitted ? Colors.amber.withValues(alpha: 0.5) : Colors.cyan.withValues(alpha: 0.5)),
                       ),
                     ),
-                  ],
-                ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              isConfirmed ? Icons.check_circle : (isSubmitted ? Icons.hourglass_top : Icons.key),
+                              color: isConfirmed ? Colors.greenAccent : (isSubmitted ? Colors.amber : Colors.cyanAccent),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              isConfirmed
+                                  ? "Pre-Trip Inspection Approved by Host"
+                                  : (isSubmitted ? "Pre-Trip Inspection Submitted" : "Step 3: Key Handover & Digital Inspection"),
+                              style: TextStyle(
+                                color: isConfirmed ? Colors.greenAccent : (isSubmitted ? Colors.amber : Colors.cyanAccent),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          isConfirmed
+                              ? "Host has verified and approved your pre-trip inspection. Keys can now be handed over to start your trip."
+                              : (isSubmitted
+                                  ? "Your pre-trip inspection sheet is submitted! Awaiting host review & confirmation before key handover."
+                                  : "Host approved! Meet host at pickup location, conduct digital vehicle inspection sheet (fuel & odometer), and sign off before starting trip."),
+                          style: const TextStyle(color: Colors.white70, fontSize: 11, height: 1.3),
+                        ),
+                        const SizedBox(height: 10),
+                        if (!isConfirmed && !isSubmitted)
+                          SizedBox(
+                            width: double.infinity,
+                            height: 44,
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.cyan.shade700,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              onPressed: () async {
+                                final result = await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => VehicleInspectionScreen(
+                                      booking: _booking,
+                                      inspectionType: "Pre-Trip Handover",
+                                      isReadOnly: false,
+                                    ),
+                                  ),
+                                );
+                                if (result == true) {
+                                  setState(() {});
+                                }
+                              },
+                              icon: const Icon(Icons.fact_check, size: 18),
+                              label: const Text("Start Handover & Inspection", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                            ),
+                          )
+                        else
+                          SizedBox(
+                            width: double.infinity,
+                            height: 40,
+                            child: OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: isConfirmed ? Colors.greenAccent : Colors.amber,
+                                side: BorderSide(color: isConfirmed ? Colors.green : Colors.amber),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => VehicleInspectionScreen(
+                                      booking: _booking,
+                                      inspectionType: "Pre-Trip Handover",
+                                      isReadOnly: true,
+                                    ),
+                                  ),
+                                );
+                              },
+                              icon: const Icon(Icons.description_outlined, size: 16),
+                              label: Text(
+                                isConfirmed ? "View Approved Inspection Sheet" : "View Submitted Inspection Sheet",
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
               ),
               SizedBox(
                 width: double.infinity,
@@ -521,56 +600,92 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                   label: const Text("Cancel Booking Request"),
                 ),
               ),
-            ] else if (status == "In Progress") ...[
+            ] else if (status == "In Progress" || status == "Return Pending") ...[
               Container(
                 margin: const EdgeInsets.only(bottom: 12),
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.green.withValues(alpha: 0.12),
+                  color: (status == "Return Pending" ? Colors.amber : Colors.green).withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.green.withValues(alpha: 0.4)),
+                  border: Border.all(color: (status == "Return Pending" ? Colors.amber : Colors.green).withValues(alpha: 0.4)),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.directions_car, color: Colors.greenAccent, size: 24),
+                    Icon(
+                      status == "Return Pending" ? Icons.assignment_turned_in : Icons.directions_car,
+                      color: status == "Return Pending" ? Colors.amberAccent : Colors.greenAccent,
+                      size: 24,
+                    ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        "Trip In Progress • Return vehicle by ${_booking.returnDate}",
-                        style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 12),
+                        status == "Return Pending"
+                            ? "Return Inspection Submitted • Awaiting Host Confirmation"
+                            : "Trip In Progress • Return vehicle by ${_booking.returnDate}",
+                        style: TextStyle(
+                          color: status == "Return Pending" ? Colors.amberAccent : Colors.greenAccent,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.teal.shade700,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                  ),
-                  onPressed: () async {
-                    final result = await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => VehicleInspectionScreen(
-                          booking: _booking,
-                          inspectionType: "Post-Trip Return",
-                          isReadOnly: false,
+              if (status != "Return Pending" && _booking.returnInspectionStatus != "submitted")
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.teal.shade700,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                    onPressed: () async {
+                      final result = await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => VehicleInspectionScreen(
+                            booking: _booking,
+                            inspectionType: "Post-Trip Return",
+                            isReadOnly: false,
+                          ),
                         ),
-                      ),
-                    );
-                    if (result == true) {
-                      setState(() {});
-                    }
-                  },
-                  icon: const Icon(Icons.assignment_turned_in),
-                  label: const Text("Conduct Return Inspection & Complete Trip", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                      );
+                      if (result == true) {
+                        setState(() {});
+                      }
+                    },
+                    icon: const Icon(Icons.assignment_turned_in),
+                    label: const Text("Conduct Return Inspection Sheet", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                  ),
+                )
+              else
+                SizedBox(
+                  width: double.infinity,
+                  height: 44,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.tealAccent,
+                      side: const BorderSide(color: Colors.teal),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => VehicleInspectionScreen(
+                            booking: _booking,
+                            isReadOnly: true,
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.description_outlined, size: 16),
+                    label: const Text("View Submitted Return Inspection", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  ),
                 ),
-              ),
             ] else if (status == "Pending") ...[
               SizedBox(
                 width: double.infinity,

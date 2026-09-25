@@ -3,55 +3,63 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'firestore_service.dart';
 
 // ================= USER SESSION DATA & PROFILES =================
-String name = "Sami";
-String email = "sami@example.com";
-String password = "123";
-
-class DemoUserProfile {
+class AppUserProfile {
   final String id;
   final String name;
   final String email;
+  final String password;
   final String role; // "Customer" or "Host"
   final Color color;
+  final String phone;
+  final String location;
 
-  const DemoUserProfile({
+  const AppUserProfile({
     required this.id,
     required this.name,
     required this.email,
+    required this.password,
     required this.role,
     required this.color,
+    this.phone = "+92 300 1234567",
+    this.location = "Islamabad, Pakistan",
   });
 }
 
-final List<DemoUserProfile> demoUserProfiles = [
-  const DemoUserProfile(
-    id: "user_sami",
-    name: "Sami",
-    email: "sami@example.com",
-    role: "Customer",
-    color: Colors.teal,
-  ),
-  const DemoUserProfile(
-    id: "user_hamza",
-    name: "Hamza",
-    email: "hamza@example.com",
-    role: "Customer",
-    color: Colors.deepPurple,
-  ),
-  const DemoUserProfile(
-    id: "user_ali_host",
-    name: "Ali Raza (Host)",
-    email: "host@example.com",
-    role: "Host",
-    color: Colors.amber,
-  ),
-];
+final List<AppUserProfile> appUserProfiles = [];
 
-String activeUserEmail = "sami@example.com";
-String activeUserName = "Sami";
+// Backwards compatibility alias
+typedef DemoUserProfile = AppUserProfile;
+final List<AppUserProfile> demoUserProfiles = appUserProfiles;
+
+String name = "";
+String email = "";
+String password = "";
+String activeUserId = "";
+String activeUserEmail = "";
+String activeUserName = "";
+String activeUserRole = "customer"; // "customer", "owner", or "admin"
+
+/// Cleanly resets current user session state and in-memory caches upon logout
+void resetUserSessionState() {
+  name = "";
+  email = "";
+  password = "";
+  activeUserId = "";
+  activeUserEmail = "";
+  activeUserName = "";
+  activeUserRole = "customer";
+  chatMessagesList.clear();
+  userBookingsList.clear();
+  currentUserVerification = const VerificationData(status: "unverified");
+  currentHostPayout = const HostPayoutSettings();
+  favoriteCarIds.clear();
+  readNotificationIds.clear();
+  FirestoreService.cancelRealtimeListeners();
+}
 
 // ================= CAR DATA MODEL =================
 class CarItem {
@@ -69,9 +77,19 @@ class CarItem {
   final String description;
   final String rentalMode; // "Both Available", "Self-Drive", "With Driver"
   final bool isUserCar;
+  final String ownerId;
+  final String ownerEmail;
   final String availableFrom;
   final String availableTo;
   final Map<String, String>? photos;
+  final List<String>? features;
+  final String category;
+  final bool isApproved;
+  final String approvalStatus; // "approved", "pending", "rejected", "pending_update"
+  final String rejectionReason;
+  final Map<String, dynamic>? pendingUpdates;
+  final String registrationNumber;
+  final String registrationDocUrl;
 
   const CarItem({
     required this.id,
@@ -88,10 +106,47 @@ class CarItem {
     this.description = "Well maintained vehicle ready for your trip. Excellent condition with regular service history.",
     this.rentalMode = "Both Available",
     this.isUserCar = false,
+    this.ownerId = "",
+    this.ownerEmail = "",
     this.availableFrom = "Available Now",
     this.availableTo = "Always Open",
     this.photos,
+    this.features,
+    this.category = "Sedan",
+    this.isApproved = true,
+    this.approvalStatus = "approved",
+    this.rejectionReason = "",
+    this.pendingUpdates,
+    this.registrationNumber = "",
+    this.registrationDocUrl = "",
+    this.rejectionIssues = const [],
   });
+
+  final List<String> rejectionIssues;
+
+  bool get isPubliclyVisible {
+    if (!isUserCar) return true;
+    return isApproved && (approvalStatus == "approved" || approvalStatus == "pending_update");
+  }
+
+  bool get isPendingApproval => approvalStatus == "pending";
+  bool get isPendingUpdate => approvalStatus == "pending_update";
+  bool get isRejected => approvalStatus == "rejected";
+
+  bool get isOwnedByActiveUser {
+    final curUid = (activeUserId.isNotEmpty ? activeUserId : (FirebaseAuth.instance.currentUser?.uid ?? "")).trim();
+    if (curUid.isNotEmpty && ownerId.isNotEmpty && ownerId == curUid) return true;
+    final current = (activeUserEmail.isNotEmpty ? activeUserEmail : email).trim().toLowerCase();
+    if (current.isEmpty || ownerEmail.trim().isEmpty) return false;
+    return ownerEmail.trim().toLowerCase() == current;
+  }
+
+  bool isOwnedBy(String hostIdOrEmail) {
+    if (hostIdOrEmail.trim().isEmpty) return false;
+    if (ownerId.isNotEmpty && ownerId == hostIdOrEmail.trim()) return true;
+    if (ownerEmail.isNotEmpty && ownerEmail.trim().toLowerCase() == hostIdOrEmail.trim().toLowerCase()) return true;
+    return false;
+  }
 
   String get availabilityText {
     if (availableFrom == "Available Now" && availableTo == "Always Open") {
@@ -155,9 +210,20 @@ class CarItem {
       "description": description,
       "rentalMode": rentalMode,
       "isUserCar": isUserCar,
+      "ownerId": ownerId,
+      "ownerEmail": ownerEmail,
       "availableFrom": availableFrom,
       "availableTo": availableTo,
       "photos": photos,
+      "features": features,
+      "category": category,
+      "isApproved": isApproved,
+      "approvalStatus": approvalStatus,
+      "rejectionReason": rejectionReason,
+      "pendingUpdates": pendingUpdates,
+      "registrationNumber": registrationNumber,
+      "registrationDocUrl": registrationDocUrl,
+      "rejectionIssues": rejectionIssues,
     };
   }
 
@@ -172,11 +238,76 @@ class CarItem {
       });
     }
 
+    List<String>? parsedFeatures;
+    if (json["features"] is List) {
+      parsedFeatures = (json["features"] as List)
+          .map((e) => e.toString().trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
+    } else {
+      // Backward compatibility: extract from description if present
+      final desc = (json["description"] ?? "").toString();
+      if (desc.contains("Features:")) {
+        try {
+          final afterFeatures = desc.split("Features:")[1];
+          final firstPart = afterFeatures.split("•")[0].split("\n")[0];
+          parsedFeatures = firstPart
+              .split(',')
+              .map((s) => s.trim())
+              .where((s) => s.isNotEmpty)
+              .toList();
+        } catch (_) {}
+      }
+    }
+
+    String parsedCategory = "Sedan";
+    if (json["category"] != null && json["category"].toString().trim().isNotEmpty) {
+      parsedCategory = json["category"].toString().trim();
+    } else {
+      final desc = (json["description"] ?? "").toString().toLowerCase();
+      if (desc.contains("body: suv") || desc.contains("suv") || desc.contains("crossover")) {
+        parsedCategory = "SUV";
+      } else if (desc.contains("body: luxury") || desc.contains("luxury") || desc.contains("mercedes") || desc.contains("bmw") || desc.contains("audi")) {
+        parsedCategory = "Luxury";
+      } else if (desc.contains("body: 7-seater") || desc.contains("7-seater") || (json["seats"] ?? "").toString().contains("7")) {
+        parsedCategory = "7-Seater";
+      } else if (desc.contains("body: hatchback") || desc.contains("hatchback") || desc.contains("alto") || desc.contains("swift")) {
+        parsedCategory = "Hatchback";
+      } else {
+        parsedCategory = "Sedan";
+      }
+    }
+
     double parsedRating = 5.0;
     if (json["rating"] is num) {
       parsedRating = (json["rating"] as num).toDouble();
     } else if (json["rating"] != null) {
       parsedRating = double.tryParse(json["rating"].toString()) ?? 5.0;
+    }
+
+    final bool isUser = json["isUserCar"] == true || json["isUserCar"]?.toString() == "true";
+    final rawStatus = json["approvalStatus"]?.toString().toLowerCase().trim();
+
+    bool parsedIsApproved = true;
+    String parsedApprovalStatus = "approved";
+
+    if (isUser) {
+      if (rawStatus != null && rawStatus.isNotEmpty) {
+        parsedApprovalStatus = rawStatus;
+        parsedIsApproved = rawStatus == "approved" || rawStatus == "pending_update";
+      } else if (json["isApproved"] != null) {
+        parsedIsApproved = json["isApproved"] == true || json["isApproved"]?.toString() == "true";
+        parsedApprovalStatus = parsedIsApproved ? "approved" : "pending";
+      } else {
+        // Default unapproved for newly loaded user cars without explicit status
+        parsedIsApproved = false;
+        parsedApprovalStatus = "pending";
+      }
+    }
+
+    Map<String, dynamic>? parsedPendingUpdates;
+    if (json["pendingUpdates"] is Map) {
+      parsedPendingUpdates = Map<String, dynamic>.from(json["pendingUpdates"] as Map);
     }
 
     return CarItem(
@@ -193,15 +324,31 @@ class CarItem {
       location: json["location"]?.toString() ?? "Islamabad, Pakistan",
       description: json["description"]?.toString() ?? "",
       rentalMode: CarItem.inferRentalMode(Map<String, dynamic>.from(json)),
-      isUserCar: json["isUserCar"] == true || json["isUserCar"]?.toString() == "true",
+      isUserCar: isUser,
+      ownerId: json["ownerId"]?.toString() ?? "",
+      ownerEmail: json["ownerEmail"]?.toString() ?? "",
       availableFrom: json["availableFrom"]?.toString() ?? "Available Now",
       availableTo: json["availableTo"]?.toString() ?? "Always Open",
       photos: parsedPhotos,
+      features: parsedFeatures,
+      category: parsedCategory,
+      isApproved: parsedIsApproved,
+      approvalStatus: parsedApprovalStatus,
+      rejectionReason: json["rejectionReason"]?.toString() ?? "",
+      pendingUpdates: parsedPendingUpdates,
+      registrationNumber: json["registrationNumber"]?.toString() ?? "",
+      registrationDocUrl: json["registrationDocUrl"]?.toString() ?? "",
+      rejectionIssues: (json["rejectionIssues"] is List)
+          ? (json["rejectionIssues"] as List).map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList()
+          : const [],
     );
   }
 }
 
 // ================= IMAGE RENDERER HELPER =================
+// Fast in-memory cache for decoded Base64 image bytes to avoid repeated decoding on main thread
+final Map<String, Uint8List> _base64BytesCache = {};
+
 Widget buildCarImage(
   String path, {
   double? width,
@@ -218,6 +365,10 @@ Widget buildCarImage(
     );
   }
 
+  // Safe cache dimensions calculation (2x pixel density for crisp retina screens)
+  final int? targetCacheWidth = (width != null && width.isFinite && width > 0) ? (width * 2).toInt() : null;
+  final int? targetCacheHeight = (height != null && height.isFinite && height > 0) ? (height * 2).toInt() : null;
+
   Widget img;
   if (path.isEmpty) {
     img = fallback();
@@ -227,14 +378,42 @@ Widget buildCarImage(
       width: width,
       height: height,
       fit: fit,
+      cacheWidth: targetCacheWidth,
+      cacheHeight: targetCacheHeight,
       errorBuilder: (context, error, stackTrace) => fallback(),
     );
+  } else if (path.startsWith("data:image/") || path.startsWith("data:application/")) {
+    try {
+      Uint8List? bytes = _base64BytesCache[path];
+      if (bytes == null) {
+        final base64Content = path.contains(",") ? path.split(",").last : path;
+        bytes = base64Decode(base64Content.trim());
+        // Cap cache to 150 items to keep memory bounded
+        if (_base64BytesCache.length > 150) {
+          _base64BytesCache.remove(_base64BytesCache.keys.first);
+        }
+        _base64BytesCache[path] = bytes;
+      }
+      img = Image.memory(
+        bytes,
+        width: width,
+        height: height,
+        fit: fit,
+        cacheWidth: targetCacheWidth,
+        cacheHeight: targetCacheHeight,
+        errorBuilder: (context, error, stackTrace) => fallback(),
+      );
+    } catch (_) {
+      img = fallback();
+    }
   } else if (kIsWeb || path.startsWith("blob:") || path.startsWith("http://") || path.startsWith("https://")) {
     img = Image.network(
       path,
       width: width,
       height: height,
       fit: fit,
+      cacheWidth: targetCacheWidth,
+      cacheHeight: targetCacheHeight,
       errorBuilder: (context, error, stackTrace) => fallback(),
     );
   } else {
@@ -245,6 +424,8 @@ Widget buildCarImage(
         width: width,
         height: height,
         fit: fit,
+        cacheWidth: targetCacheWidth,
+        cacheHeight: targetCacheHeight,
         errorBuilder: (context, error, stackTrace) => fallback(),
       );
     } catch (_) {
@@ -320,7 +501,11 @@ class VehicleInspectionSheet {
   final String bookingId;
   final String type; // "Pre-Trip Handover" or "Post-Trip Return"
   final DateTime timestamp;
+  final String inspectorId;
   final String inspectorName;
+  final String customerId;
+  final String ownerId;
+  final String status; // "customer_confirmed", "owner_reviewed", "return_submitted", "return_confirmed"
   final int odometerKm;
   final int fuelLevelPercent; // 0 to 100
   final bool exteriorClean;
@@ -339,7 +524,11 @@ class VehicleInspectionSheet {
     required this.bookingId,
     required this.type,
     required this.timestamp,
+    this.inspectorId = "",
     required this.inspectorName,
+    this.customerId = "",
+    this.ownerId = "",
+    this.status = "customer_confirmed",
     required this.odometerKm,
     this.fuelLevelPercent = 100,
     this.exteriorClean = true,
@@ -359,7 +548,11 @@ class VehicleInspectionSheet {
         "bookingId": bookingId,
         "type": type,
         "timestamp": timestamp.toIso8601String(),
+        "inspectorId": inspectorId,
         "inspectorName": inspectorName,
+        "customerId": customerId,
+        "ownerId": ownerId,
+        "status": status,
         "odometerKm": odometerKm,
         "fuelLevelPercent": fuelLevelPercent,
         "exteriorClean": exteriorClean,
@@ -382,7 +575,11 @@ class VehicleInspectionSheet {
       timestamp: json["timestamp"] != null
           ? (DateTime.tryParse(json["timestamp"]) ?? DateTime.now())
           : DateTime.now(),
+      inspectorId: json["inspectorId"]?.toString() ?? "",
       inspectorName: json["inspectorName"]?.toString() ?? "",
+      customerId: json["customerId"]?.toString() ?? "",
+      ownerId: json["ownerId"]?.toString() ?? "",
+      status: json["status"]?.toString() ?? "customer_confirmed",
       odometerKm: int.tryParse(json["odometerKm"]?.toString() ?? "0") ?? 0,
       fuelLevelPercent: int.tryParse(json["fuelLevelPercent"]?.toString() ?? "100") ?? 100,
       exteriorClean: json["exteriorClean"] == true || json["exteriorClean"]?.toString() == "true",
@@ -414,11 +611,18 @@ class BookingItem {
   final String pickupDate;
   final String returnDate;
   String status;
+  final String customerId;
   final String customerEmail;
   final String customerName;
+  final String ownerId;
   final String paymentMethod;
+  String paymentStatus; // "Pending", "Paid"
+  String inspectionStatus; // "pending", "customer_confirmed"
+  String returnInspectionStatus; // "none", "submitted", "confirmed"
+  bool registrationCardHandedOver;
   final int securityDeposit;
   final String rentalModeOption;
+  final String paymentProofUrl;
   VehicleInspectionSheet? preTripInspection;
   VehicleInspectionSheet? postTripInspection;
 
@@ -431,11 +635,18 @@ class BookingItem {
     this.pickupDate = "",
     this.returnDate = "",
     this.status = "Confirmed",
+    this.customerId = "",
     this.customerEmail = "",
     this.customerName = "",
+    this.ownerId = "",
     this.paymentMethod = "Cash on Pickup",
+    this.paymentStatus = "Pending",
+    this.inspectionStatus = "pending",
+    this.returnInspectionStatus = "none",
+    this.registrationCardHandedOver = false,
     this.securityDeposit = 15000,
     this.rentalModeOption = "Self-Drive",
+    this.paymentProofUrl = "",
     this.preTripInspection,
     this.postTripInspection,
   });
@@ -453,7 +664,8 @@ class BookingItem {
   }
 
   bool get isScheduleBlocking {
-    return status == "Confirmed" || status == "In Progress" || status == "Pending";
+    final s = status.trim().toLowerCase();
+    return s == "confirmed" || s == "in progress" || s == "pending" || s == "return pending";
   }
 
   Map<String, dynamic> toJson() {
@@ -466,11 +678,18 @@ class BookingItem {
       "pickupDate": pickupDate,
       "returnDate": returnDate,
       "status": status,
+      "customerId": customerId,
       "customerEmail": customerEmail,
       "customerName": customerName,
+      "ownerId": ownerId.isNotEmpty ? ownerId : car.ownerId,
       "paymentMethod": paymentMethod,
+      "paymentStatus": paymentStatus,
+      "inspectionStatus": inspectionStatus,
+      "returnInspectionStatus": returnInspectionStatus,
+      "registrationCardHandedOver": registrationCardHandedOver,
       "securityDeposit": securityDeposit,
       "rentalModeOption": rentalModeOption,
+      "paymentProofUrl": paymentProofUrl,
       "preTripInspection": preTripInspection?.toJson(),
       "postTripInspection": postTripInspection?.toJson(),
     };
@@ -486,11 +705,26 @@ class BookingItem {
       pickupDate: json["pickupDate"] ?? "",
       returnDate: json["returnDate"] ?? "",
       status: json["status"] ?? "Confirmed",
+      customerId: json["customerId"]?.toString() ?? "",
       customerEmail: json["customerEmail"] ?? "",
       customerName: json["customerName"] ?? "",
+      ownerId: json["ownerId"]?.toString() ?? "",
       paymentMethod: json["paymentMethod"]?.toString() ?? "Cash on Pickup",
+      paymentStatus: json["paymentStatus"]?.toString() ??
+          ((json["paymentMethod"] != null &&
+                  json["paymentMethod"] != "Cash on Handover" &&
+                  json["paymentMethod"] != "Cash on Pickup")
+              ? "Paid"
+              : (json["status"] == "Completed" ? "Paid" : "Pending")),
+      inspectionStatus: json["inspectionStatus"]?.toString() ??
+          (json["preTripInspection"] != null ? "customer_confirmed" : "pending"),
+      returnInspectionStatus: json["returnInspectionStatus"]?.toString() ??
+          (json["postTripInspection"] != null ? "confirmed" : (json["status"] == "Completed" ? "confirmed" : "none")),
+      registrationCardHandedOver: json["registrationCardHandedOver"] == true ||
+          (json["preTripInspection"] != null && json["preTripInspection"]["hasRegistrationCard"] == true),
       securityDeposit: int.tryParse(json["securityDeposit"]?.toString() ?? "15000") ?? 15000,
       rentalModeOption: json["rentalModeOption"]?.toString() ?? "Self-Drive",
+      paymentProofUrl: json["paymentProofUrl"]?.toString() ?? "",
       preTripInspection: json["preTripInspection"] != null
           ? VehicleInspectionSheet.fromJson(Map<String, dynamic>.from(json["preTripInspection"] as Map))
           : null,
@@ -499,6 +733,84 @@ class BookingItem {
           : null,
     );
   }
+}
+
+// ================= VEHICLE SCHEDULE DATA MODEL =================
+class CarSchedule {
+  final String id;
+  final String bookingId;
+  final String carId;
+  final String carName;
+  final String startDate;
+  final String endDate;
+  final String status;
+
+  const CarSchedule({
+    required this.id,
+    required this.bookingId,
+    required this.carId,
+    required this.carName,
+    required this.startDate,
+    required this.endDate,
+    required this.status,
+  });
+
+  DateTime? get startDateTime => parseDateString(startDate);
+  DateTime? get endDateTime => parseDateString(endDate);
+
+  /// A schedule blocks availability if it is currently pending approval or confirmed/in-progress.
+  /// If it is "Declined", "Cancelled", or "Completed", the dates become free again!
+  bool get isBlocking {
+    final s = status.trim().toLowerCase();
+    return s == "pending" || s == "confirmed" || s == "in progress" || s == "return pending";
+  }
+
+  Map<String, dynamic> toJson() => {
+    "id": id,
+    "bookingId": bookingId,
+    "carId": carId,
+    "carName": carName,
+    "startDate": startDate,
+    "endDate": endDate,
+    "status": status,
+  };
+
+  factory CarSchedule.fromJson(Map<String, dynamic> json) => CarSchedule(
+    id: json["id"]?.toString() ?? "",
+    bookingId: json["bookingId"]?.toString() ?? "",
+    carId: json["carId"]?.toString() ?? "",
+    carName: json["carName"]?.toString() ?? "",
+    startDate: json["startDate"]?.toString() ?? "",
+    endDate: json["endDate"]?.toString() ?? "",
+    status: json["status"]?.toString() ?? "Pending",
+  );
+}
+
+final List<CarSchedule> publicCarSchedules = [];
+const String _kCarSchedulesStorageKey = "saved_car_schedules_v1";
+
+Future<void> saveCarSchedulesToLocalStorage() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonList = publicCarSchedules.map((s) => s.toJson()).toList();
+    await prefs.setString(_kCarSchedulesStorageKey, jsonEncode(jsonList));
+  } catch (_) {}
+}
+
+Future<void> loadCarSchedulesFromLocalStorage() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_kCarSchedulesStorageKey);
+    if (raw != null && raw.isNotEmpty) {
+      final List decoded = jsonDecode(raw);
+      publicCarSchedules.clear();
+      for (final item in decoded) {
+        if (item is Map) {
+          publicCarSchedules.add(CarSchedule.fromJson(Map<String, dynamic>.from(item)));
+        }
+      }
+    }
+  } catch (_) {}
 }
 
 // ================= NOTIFICATION DATA MODEL =================
@@ -556,7 +868,7 @@ class AppNotification {
   }
 }
 
-// ================= DEFAULT DEMO FLEET =================
+// ================= DEFAULT FLEET =================
 final List<CarItem> defaultInitialCars = [
   const CarItem(
     id: "1",
@@ -571,6 +883,7 @@ final List<CarItem> defaultInitialCars = [
     speed: "240 km/h",
     location: "Blue Area, Islamabad",
     description: "Luxury and comfort combined. Perfect for business meetings and executive travel with premium interior and smooth suspension.",
+    ownerEmail: "",
   ),
   const CarItem(
     id: "2",
@@ -585,6 +898,7 @@ final List<CarItem> defaultInitialCars = [
     speed: "290 km/h",
     location: "F-7 Markaz, Islamabad",
     description: "Unmatched performance with twin-turbo power, sporty aggressive styling, and track-ready dynamics.",
+    ownerEmail: "",
   ),
   const CarItem(
     id: "3",
@@ -599,6 +913,7 @@ final List<CarItem> defaultInitialCars = [
     speed: "210 km/h",
     location: "G-11 Markaz, Islamabad",
     description: "Rugged reliability and 7-seater spacious luxury for both city driving and northern Pakistan road trips.",
+    ownerEmail: "",
   ),
   const CarItem(
     id: "4",
@@ -613,6 +928,7 @@ final List<CarItem> defaultInitialCars = [
     speed: "305 km/h",
     location: "DHA Phase 2, Islamabad",
     description: "Sleek aerodynamic design with Quattro all-wheel drive, dual sport exhaust, and Bang & Olufsen sound.",
+    ownerEmail: "",
   ),
   const CarItem(
     id: "5",
@@ -627,9 +943,10 @@ final List<CarItem> defaultInitialCars = [
     speed: "220 km/h",
     location: "F-10 Markaz, Islamabad",
     description: "Sporty sedan with turbocharged performance, sunroof, leather seats, and great fuel efficiency.",
-    isUserCar: true,
-    availableFrom: "10 Sep 2026",
-    availableTo: "10 Oct 2026",
+    isUserCar: false,
+    ownerEmail: "",
+    availableFrom: "Available Now",
+    availableTo: "Always Open",
   ),
   const CarItem(
     id: "6",
@@ -644,6 +961,7 @@ final List<CarItem> defaultInitialCars = [
     speed: "210 km/h",
     location: "Saddar, Rawalpindi",
     description: "Spacious compact SUV with panoramic sunroof, heated seats, and comfortable suspension for city and highway travel.",
+    ownerEmail: "",
   ),
   const CarItem(
     id: "7",
@@ -658,11 +976,13 @@ final List<CarItem> defaultInitialCars = [
     speed: "200 km/h",
     location: "Bahria Town, Rawalpindi",
     description: "Reliable modern crossover with high ground clearance, excellent legroom, and fuel efficiency.",
+    ownerEmail: "",
   ),
 ];
 
 // ================= GLOBAL SHARED APP STATE =================
 final List<CarItem> allCarsList = List<CarItem>.from(defaultInitialCars);
+final Set<String> deletedCarIds = <String>{};
 final List<BookingItem> userBookingsList = [];
 
 // ================= USER-SPECIFIC BOOKING & LOCK HELPERS =================
@@ -725,6 +1045,7 @@ List<DateTimeRange> getBookedDateRangesForCar(CarItem car) {
   final targetName = car.name.trim().toLowerCase();
   final targetId = car.id.trim();
 
+  // 1. From local userBookingsList
   for (final b in userBookingsList) {
     final matchesCar = (targetId.isNotEmpty && b.car.id.isNotEmpty && b.car.id == targetId) ||
         b.car.name.trim().toLowerCase() == targetName;
@@ -733,7 +1054,115 @@ List<DateTimeRange> getBookedDateRangesForCar(CarItem car) {
       ranges.add(DateTimeRange(start: b.startDateTime, end: b.endDateTime));
     }
   }
+
+  // 2. From publicCarSchedules (synced across all renters)
+  for (final s in publicCarSchedules) {
+    final matchesCar = (targetId.isNotEmpty && s.carId.isNotEmpty && s.carId == targetId) ||
+        s.carName.trim().toLowerCase() == targetName;
+
+    if (!matchesCar || !s.isBlocking) continue;
+
+    // Cross-check with local bookings: if this schedule corresponds to a booking
+    // that is already Completed, Cancelled, or Declined, do NOT block!
+    final matchingBooking = userBookingsList.where((b) =>
+        (s.bookingId.isNotEmpty && b.id == s.bookingId) ||
+        (s.id.isNotEmpty && b.id == s.id) ||
+        (s.carId.isNotEmpty && s.carId == b.car.id && s.startDate == b.pickupDate && s.endDate == b.returnDate) ||
+        (s.carName.trim().toLowerCase() == b.car.name.trim().toLowerCase() && s.startDate == b.pickupDate && s.endDate == b.returnDate)).firstOrNull;
+
+    if (matchingBooking != null && !matchingBooking.isScheduleBlocking) {
+      continue;
+    }
+
+    final sStart = s.startDateTime;
+    final sEnd = s.endDateTime;
+    if (sStart != null && sEnd != null) {
+      final alreadyAdded = ranges.any((r) =>
+          r.start.year == sStart.year && r.start.month == sStart.month && r.start.day == sStart.day &&
+          r.end.year == sEnd.year && r.end.month == sEnd.month && r.end.day == sEnd.day);
+      if (!alreadyAdded) {
+        ranges.add(DateTimeRange(start: sStart, end: sEnd));
+      }
+    }
+  }
+
   return ranges;
+}
+
+/// Checks if [booking] conflicts with any ALREADY CONFIRMED or ACTIVE booking for the same vehicle.
+bool hasBookingDateConflict(BookingItem booking) {
+  final bStart = DateTime(booking.startDateTime.year, booking.startDateTime.month, booking.startDateTime.day);
+  final bEnd = DateTime(booking.endDateTime.year, booking.endDateTime.month, booking.endDateTime.day);
+  final carId = booking.car.id.trim();
+  final carName = booking.car.name.trim().toLowerCase();
+
+  // 1. Check against confirmed/in-progress bookings in userBookingsList
+  for (final other in userBookingsList) {
+    if (other.id == booking.id) continue;
+    final sameCar = (carId.isNotEmpty && other.car.id.isNotEmpty && other.car.id == carId) ||
+        other.car.name.trim().toLowerCase() == carName;
+    if (!sameCar) continue;
+
+    if (other.status == "Confirmed" || other.status == "In Progress") {
+      final oStart = DateTime(other.startDateTime.year, other.startDateTime.month, other.startDateTime.day);
+      final oEnd = DateTime(other.endDateTime.year, other.endDateTime.month, other.endDateTime.day);
+
+      if ((bStart.isBefore(oEnd) || bStart.isAtSameMomentAs(oEnd)) &&
+          (bEnd.isAfter(oStart) || bEnd.isAtSameMomentAs(oStart))) {
+        return true;
+      }
+    }
+  }
+
+  // 2. Check against confirmed/in-progress schedules in publicCarSchedules
+  for (final s in publicCarSchedules) {
+    if (s.bookingId == booking.id) continue;
+    final sameCar = (carId.isNotEmpty && s.carId.isNotEmpty && s.carId == carId) ||
+        s.carName.trim().toLowerCase() == carName;
+    if (!sameCar) continue;
+
+    final sStatus = s.status.trim().toLowerCase();
+    if (sStatus == "confirmed" || sStatus == "in progress") {
+      final sStart = s.startDateTime;
+      final sEnd = s.endDateTime;
+      if (sStart == null || sEnd == null) continue;
+      final osStart = DateTime(sStart.year, sStart.month, sStart.day);
+      final osEnd = DateTime(sEnd.year, sEnd.month, sEnd.day);
+
+      if ((bStart.isBefore(osEnd) || bStart.isAtSameMomentAs(osEnd)) &&
+          (bEnd.isAfter(osStart) || bEnd.isAtSameMomentAs(osStart))) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/// Returns the existing confirmed booking that conflicts with [booking], if one exists.
+BookingItem? getConflictingConfirmedBooking(BookingItem booking) {
+  final bStart = DateTime(booking.startDateTime.year, booking.startDateTime.month, booking.startDateTime.day);
+  final bEnd = DateTime(booking.endDateTime.year, booking.endDateTime.month, booking.endDateTime.day);
+  final carId = booking.car.id.trim();
+  final carName = booking.car.name.trim().toLowerCase();
+
+  for (final other in userBookingsList) {
+    if (other.id == booking.id) continue;
+    final sameCar = (carId.isNotEmpty && other.car.id.isNotEmpty && other.car.id == carId) ||
+        other.car.name.trim().toLowerCase() == carName;
+    if (!sameCar) continue;
+
+    if (other.status == "Confirmed" || other.status == "In Progress") {
+      final oStart = DateTime(other.startDateTime.year, other.startDateTime.month, other.startDateTime.day);
+      final oEnd = DateTime(other.endDateTime.year, other.endDateTime.month, other.endDateTime.day);
+
+      if ((bStart.isBefore(oEnd) || bStart.isAtSameMomentAs(oEnd)) &&
+          (bEnd.isAfter(oStart) || bEnd.isAtSameMomentAs(oStart))) {
+        return other;
+      }
+    }
+  }
+  return null;
 }
 
 /// Returns true if a specific calendar day is already reserved for this car.
@@ -807,16 +1236,16 @@ String getCarAvailabilitySummary(CarItem car) {
 
 bool isCarActivelyBooked(CarItem car) {
   return userBookingsList.any((b) =>
-      (b.car.id == car.id ||
+      ((car.id.isNotEmpty && b.car.id.isNotEmpty && b.car.id == car.id) ||
           b.car.name.toLowerCase().trim() == car.name.toLowerCase().trim()) &&
-      (b.status == "Pending" || b.status == "Confirmed" || b.status == "In Progress"));
+      b.isScheduleBlocking);
 }
 
 bool isCarNameActivelyBooked(String carName) {
   final nameTrimmed = carName.toLowerCase().trim();
   return userBookingsList.any((b) =>
       b.car.name.toLowerCase().trim() == nameTrimmed &&
-      (b.status == "Pending" || b.status == "Confirmed" || b.status == "In Progress"));
+      b.isScheduleBlocking);
 }
 
 BookingItem? getActiveBookingForCar(String carName) {
@@ -831,17 +1260,83 @@ BookingItem? getActiveBookingForCar(String carName) {
 }
 
 // ================= LOCAL PERSISTENCE STORAGE (LAPTOP / DEVICE) =================
+String _userScopedKey(String baseKey) {
+  final uid = (activeUserId.isNotEmpty ? activeUserId : (FirebaseAuth.instance.currentUser?.uid ?? "")).trim();
+  if (uid.isNotEmpty) return "${baseKey}_$uid";
+  final em = (activeUserEmail.isNotEmpty ? activeUserEmail : email).trim().toLowerCase().replaceAll('.', '_');
+  if (em.isNotEmpty) return "${baseKey}_$em";
+  return baseKey;
+}
+
 const String _kCarsStorageKey = "saved_cars_list_v3";
 const String _kUserCarsDedicatedKey = "saved_user_custom_cars_dedicated_v1";
 const String _kBookingsStorageKey = "saved_bookings_list_v2";
+const String _kDeletedCarIdsStorageKey = "deleted_car_ids_v1";
 
 File _getUserCarsBackupFile() {
   return File("${Directory.systemTemp.path}/car_rental_user_cars_backup.json");
 }
 
+File _getDeletedCarIdsBackupFile() {
+  return File("${Directory.systemTemp.path}/car_rental_deleted_cars_backup.json");
+}
+
+Future<void> saveDeletedCarIdsToLocalStorage() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_kDeletedCarIdsStorageKey, deletedCarIds.toList());
+    try {
+      final file = _getDeletedCarIdsBackupFile();
+      await file.writeAsString(jsonEncode(deletedCarIds.toList()), flush: true);
+    } catch (_) {}
+    debugPrint("🗑️ saveDeletedCarIdsToLocalStorage: ${deletedCarIds.length} deleted car IDs persisted.");
+  } catch (e) {
+    debugPrint("⚠️ Failed to save deleted car ids: $e");
+  }
+}
+
+Future<void> loadDeletedCarIdsFromLocalStorage() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList(_kDeletedCarIdsStorageKey);
+    if (list != null && list.isNotEmpty) {
+      deletedCarIds.addAll(list);
+    }
+    try {
+      final file = _getDeletedCarIdsBackupFile();
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        final dynamic decoded = jsonDecode(content);
+        if (decoded is List) {
+          deletedCarIds.addAll(decoded.map((e) => e.toString()));
+        }
+      }
+    } catch (_) {}
+    debugPrint("🗑️ loadDeletedCarIdsFromLocalStorage: loaded ${deletedCarIds.length} deleted car IDs.");
+  } catch (e) {
+    debugPrint("⚠️ Failed to load deleted car ids: $e");
+  }
+}
+
+Future<void> markCarAsDeleted(String carId) async {
+  final cleanId = carId.trim();
+  deletedCarIds.add(cleanId);
+  deletedCarIds.add(carId);
+
+  // Synchronously purge from memory immediately so UI reflects deletion with zero lag
+  allCarsList.removeWhere((c) => c.id == carId || c.id.trim() == cleanId);
+
+  await saveDeletedCarIdsToLocalStorage();
+  await saveCarsToLocalStorage();
+  debugPrint("🗑️ markCarAsDeleted: car $cleanId purged from memory, SharedPreferences, and backup file.");
+}
+
 Future<bool> saveCarsToLocalStorage() async {
   try {
     final prefs = await SharedPreferences.getInstance();
+
+    // Ensure deleted cars are purged before saving
+    allCarsList.removeWhere((c) => deletedCarIds.contains(c.id));
 
     // 1. Save full active fleet to primary storage key
     final List<Map<String, dynamic>> jsonList = allCarsList.map((c) => c.toJson()).toList();
@@ -850,7 +1345,10 @@ Future<bool> saveCarsToLocalStorage() async {
 
     // 2. Save dedicated list of ONLY user-added / user-listed cars (isUserCar == true)
     // This guarantees user cars can NEVER be overwritten by default fleet!
-    final userCarsOnly = allCarsList.where((c) => c.isUserCar && c.id != "5").map((c) => c.toJson()).toList();
+    final userCarsOnly = allCarsList
+        .where((c) => c.isUserCar && c.id != "5" && !deletedCarIds.contains(c.id))
+        .map((c) => c.toJson())
+        .toList();
     final String userCarsEncoded = jsonEncode(userCarsOnly);
     await prefs.setString(_kUserCarsDedicatedKey, userCarsEncoded);
 
@@ -858,13 +1356,6 @@ Future<bool> saveCarsToLocalStorage() async {
     try {
       final file = _getUserCarsBackupFile();
       await file.writeAsString(userCarsEncoded, flush: true);
-    } catch (_) {}
-
-    // 4. Background cloud sync to Cloud Firestore
-    try {
-      for (final uc in allCarsList.where((c) => c.isUserCar)) {
-        FirestoreService.saveCarToFirestore(uc);
-      }
     } catch (_) {}
 
     debugPrint("🚗 saveCarsToLocalStorage: success=$success, total: ${allCarsList.length} cars (${userCarsOnly.length} user-listed)");
@@ -877,6 +1368,9 @@ Future<bool> saveCarsToLocalStorage() async {
 
 Future<void> loadCarsFromLocalStorage() async {
   try {
+    // Step 0: Ensure deletedCarIds are loaded first so we can filter immediately
+    await loadDeletedCarIdsFromLocalStorage();
+
     final prefs = await SharedPreferences.getInstance();
     final List<CarItem> loadedFullCars = [];
     final List<CarItem> userDedicatedCars = [];
@@ -890,7 +1384,10 @@ Future<void> loadCarsFromLocalStorage() async {
           for (final item in decoded) {
             try {
               if (item is Map) {
-                targetList.add(CarItem.fromJson(item));
+                final car = CarItem.fromJson(item);
+                if (!deletedCarIds.contains(car.id)) {
+                  targetList.add(car);
+                }
               }
             } catch (err) {
               debugPrint("⚠️ Skipping malformed car in storage: $err");
@@ -925,17 +1422,22 @@ Future<void> loadCarsFromLocalStorage() async {
       } catch (_) {}
     }
 
+    // Filter any deleted cars from loaded lists
+    loadedFullCars.removeWhere((c) => deletedCarIds.contains(c.id));
+    userDedicatedCars.removeWhere((c) => deletedCarIds.contains(c.id));
+
     // Step 5: Assemble full active fleet
     if (loadedFullCars.isNotEmpty) {
       allCarsList.clear();
       allCarsList.addAll(loadedFullCars);
     } else {
       allCarsList.clear();
-      allCarsList.addAll(defaultInitialCars);
+      allCarsList.addAll(defaultInitialCars.where((c) => !deletedCarIds.contains(c.id)));
     }
 
     // Step 6: ABSOLUTE GUARANTEE: Ensure every single user-listed car is merged into allCarsList!
     for (final uc in userDedicatedCars) {
+      if (deletedCarIds.contains(uc.id)) continue;
       final exists = allCarsList.any((c) =>
           c.id == uc.id ||
           (c.name.trim().toLowerCase() == uc.name.trim().toLowerCase() && c.isUserCar));
@@ -943,6 +1445,9 @@ Future<void> loadCarsFromLocalStorage() async {
         allCarsList.insert(0, uc);
       }
     }
+
+    // Final safety check: ensure no deleted cars remain in allCarsList
+    allCarsList.removeWhere((c) => deletedCarIds.contains(c.id));
 
     debugPrint("🚗 loadCarsFromLocalStorage: successfully restored ${allCarsList.length} cars (${allCarsList.where((c) => c.isUserCar).length} user-listed)");
   } catch (e) {
@@ -955,14 +1460,7 @@ Future<bool> saveBookingsToLocalStorage() async {
     final prefs = await SharedPreferences.getInstance();
     final List<Map<String, dynamic>> jsonList = userBookingsList.map((b) => b.toJson()).toList();
     final String encoded = jsonEncode(jsonList);
-    final success = await prefs.setString(_kBookingsStorageKey, encoded);
-    // 2. Background cloud sync to Cloud Firestore
-    try {
-      for (final b in userBookingsList) {
-        FirestoreService.saveBookingToFirestore(b);
-      }
-    } catch (_) {}
-
+    final success = await prefs.setString(_userScopedKey(_kBookingsStorageKey), encoded);
     debugPrint("📋 saveBookingsToLocalStorage: success=$success, total bookings: ${userBookingsList.length}");
     return success;
   } catch (e) {
@@ -974,7 +1472,7 @@ Future<bool> saveBookingsToLocalStorage() async {
 Future<void> loadBookingsFromLocalStorage() async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    final String? data = prefs.getString(_kBookingsStorageKey);
+    final String? data = prefs.getString(_userScopedKey(_kBookingsStorageKey));
     if (data != null && data.isNotEmpty) {
       final List<dynamic> decoded = jsonDecode(data);
       final List<BookingItem> loadedBookings = [];
@@ -1007,7 +1505,10 @@ Future<bool> recordBookingInspection({
       userBookingsList[index].postTripInspection = inspection;
       userBookingsList[index].status = "Completed";
     }
-    return await saveBookingsToLocalStorage();
+    await saveBookingsToLocalStorage();
+    await FirestoreService.saveBookingToFirestore(userBookingsList[index]);
+    debugPrint("🔥 [Inspection] Synced inspection sheet to Firestore for booking $bookingId");
+    return true;
   }
   return false;
 }
@@ -1019,7 +1520,7 @@ const String _kReadNotifsStorageKey = "saved_read_notifs_v2";
 Future<void> saveReadNotificationsToLocalStorage() async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_kReadNotifsStorageKey, readNotificationIds.toList());
+    await prefs.setStringList(_userScopedKey(_kReadNotifsStorageKey), readNotificationIds.toList());
   } catch (e) {
     debugPrint("❌ Failed to save read notification IDs: $e");
   }
@@ -1028,7 +1529,7 @@ Future<void> saveReadNotificationsToLocalStorage() async {
 Future<void> loadReadNotificationsFromLocalStorage() async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_kReadNotifsStorageKey);
+    final list = prefs.getStringList(_userScopedKey(_kReadNotifsStorageKey));
     if (list != null) {
       readNotificationIds.clear();
       readNotificationIds.addAll(list);
@@ -1044,10 +1545,15 @@ List<AppNotification> getLiveNotificationsForUser({
 }) {
   final List<AppNotification> notifs = [];
   final targetEmail = userEmail.trim().toLowerCase();
+  final currentUid = activeUserId.trim();
 
   if (isOwner) {
-    // 1. Owner sees incoming rental requests and lifecycle events
+    // 1. Owner sees incoming rental requests and lifecycle events for their vehicles only
     for (final b in userBookingsList) {
+      final isMyCarBooking = (currentUid.isNotEmpty && b.ownerId.isNotEmpty && b.ownerId == currentUid) ||
+          (targetEmail.isNotEmpty && b.car.ownerEmail.trim().toLowerCase() == targetEmail);
+      if (!isMyCarBooking) continue;
+
       final renterName = b.customerName.isNotEmpty ? b.customerName : "Customer";
       if (b.status == "Pending") {
         notifs.add(
@@ -1104,8 +1610,12 @@ List<AppNotification> getLiveNotificationsForUser({
       }
     }
 
-    // 2. Owner listed cars
+    // 2. Owner listed cars belonging to active host
     for (final car in allCarsList.where((c) => c.isUserCar)) {
+      final isMyCar = (currentUid.isNotEmpty && car.ownerId.isNotEmpty && car.ownerId == currentUid) ||
+          (targetEmail.isNotEmpty && car.ownerEmail.trim().toLowerCase() == targetEmail);
+      if (!isMyCar) continue;
+
       notifs.add(
         AppNotification(
           id: "notif_car_${car.id}",
@@ -1131,12 +1641,11 @@ List<AppNotification> getLiveNotificationsForUser({
       ),
     );
   } else {
-    // Customer Mode: Show alerts for trips booked by this customer
+    // Customer Mode: Show alerts for trips booked by this customer only
     for (final b in userBookingsList) {
-      final bEmail = (b.customerEmail.isNotEmpty ? b.customerEmail : email).trim().toLowerCase();
-      final isMyBooking = targetEmail.isEmpty || bEmail == targetEmail || targetEmail == email.trim().toLowerCase();
-
-      if (isMyBooking) {
+      final isMyBooking = (currentUid.isNotEmpty && b.customerId.isNotEmpty && b.customerId == currentUid) ||
+          (targetEmail.isNotEmpty && b.customerEmail.trim().toLowerCase() == targetEmail);
+      if (!isMyBooking) continue;
         if (b.status == "Pending") {
           notifs.add(
             AppNotification(
@@ -1204,7 +1713,6 @@ List<AppNotification> getLiveNotificationsForUser({
           );
         }
       }
-    }
 
     // Welcome customer alert
     notifs.add(
@@ -1264,8 +1772,12 @@ class VerificationData {
   final String licenseNumber;
   final String licenseExpiry;
   final String licenseImagePath;
-  final String status; // "unverified", "pending", "verified"
+  final String status; // "unverified", "pending", "verified", "rejected"
+  final bool isHostVerified;
   final DateTime? verifiedAt;
+  final DateTime? submittedAt;
+  final String rejectionReason;
+  final List<String> rejectionIssues;
 
   const VerificationData({
     this.cnicNumber = "",
@@ -1275,11 +1787,20 @@ class VerificationData {
     this.licenseExpiry = "",
     this.licenseImagePath = "",
     this.status = "unverified",
+    this.isHostVerified = false,
     this.verifiedAt,
+    this.submittedAt,
+    this.rejectionReason = "",
+    this.rejectionIssues = const [],
   });
 
   bool get isVerified => status == "verified";
   bool get isPending => status == "pending";
+  bool get isRejected => status == "rejected";
+  bool get isUnverified => status == "unverified" || status.isEmpty;
+  bool get hasCnicOnFile =>
+      cnicNumber.trim().isNotEmpty &&
+      (cnicFrontPath.trim().isNotEmpty || cnicBackPath.trim().isNotEmpty);
 
   Map<String, dynamic> toJson() => {
     "cnicNumber": cnicNumber,
@@ -1289,19 +1810,48 @@ class VerificationData {
     "licenseExpiry": licenseExpiry,
     "licenseImagePath": licenseImagePath,
     "status": status,
+    "isHostVerified": isHostVerified,
     "verifiedAt": verifiedAt?.toIso8601String(),
+    "submittedAt": submittedAt?.toIso8601String(),
+    "rejectionReason": rejectionReason,
+    "rejectionIssues": rejectionIssues,
   };
 
-  factory VerificationData.fromJson(Map<dynamic, dynamic> json) => VerificationData(
-    cnicNumber: json["cnicNumber"]?.toString() ?? "",
-    cnicFrontPath: json["cnicFrontPath"]?.toString() ?? "",
-    cnicBackPath: json["cnicBackPath"]?.toString() ?? "",
-    licenseNumber: json["licenseNumber"]?.toString() ?? "",
-    licenseExpiry: json["licenseExpiry"]?.toString() ?? "",
-    licenseImagePath: json["licenseImagePath"]?.toString() ?? "",
-    status: json["status"]?.toString() ?? "unverified",
-    verifiedAt: json["verifiedAt"] != null ? DateTime.tryParse(json["verifiedAt"].toString()) : null,
-  );
+  factory VerificationData.fromJson(Map<dynamic, dynamic> json) {
+    final rawStatus = (json["status"] ?? json["verificationStatus"])?.toString().toLowerCase().trim() ?? "";
+    final rawRole = (json["role"] ?? "").toString().toLowerCase().trim();
+    final bool hostApproved = json["isHostVerified"] == true || rawRole == "owner";
+
+    String resolvedStatus = "unverified";
+    if (rawStatus == "verified" || rawStatus == "approved" || json["isVerified"] == true || hostApproved) {
+      resolvedStatus = "verified";
+    } else if (rawStatus == "pending" || rawStatus == "in_review" || rawStatus == "under_review") {
+      resolvedStatus = "pending";
+    } else if (rawStatus == "rejected" || rawStatus == "declined") {
+      resolvedStatus = "rejected";
+    }
+
+    final rawIssues = json["rejectionIssues"];
+    List<String> parsedIssues = [];
+    if (rawIssues is List) {
+      parsedIssues = rawIssues.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList();
+    }
+
+    return VerificationData(
+      cnicNumber: json["cnicNumber"]?.toString() ?? "",
+      cnicFrontPath: json["cnicFrontPath"]?.toString() ?? json["cnicFrontUrl"]?.toString() ?? "",
+      cnicBackPath: json["cnicBackPath"]?.toString() ?? json["cnicBackUrl"]?.toString() ?? "",
+      licenseNumber: json["licenseNumber"]?.toString() ?? "",
+      licenseExpiry: json["licenseExpiry"]?.toString() ?? "",
+      licenseImagePath: json["licenseImagePath"]?.toString() ?? json["licenseUrl"]?.toString() ?? "",
+      status: resolvedStatus,
+      isHostVerified: hostApproved,
+      rejectionReason: json["rejectionReason"]?.toString() ?? json["verificationRejectionReason"]?.toString() ?? "",
+      rejectionIssues: parsedIssues,
+      verifiedAt: json["verifiedAt"] != null ? DateTime.tryParse(json["verifiedAt"].toString()) : null,
+      submittedAt: json["submittedAt"] != null ? DateTime.tryParse(json["submittedAt"].toString()) : null,
+    );
+  }
 }
 
 VerificationData currentUserVerification = const VerificationData(
@@ -1311,7 +1861,7 @@ VerificationData currentUserVerification = const VerificationData(
 Future<void> saveVerificationToLocalStorage() async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kVerificationStorageKey, jsonEncode(currentUserVerification.toJson()));
+    await prefs.setString(_userScopedKey(_kVerificationStorageKey), jsonEncode(currentUserVerification.toJson()));
   } catch (e) {
     debugPrint("❌ Failed to save verification: $e");
   }
@@ -1320,7 +1870,7 @@ Future<void> saveVerificationToLocalStorage() async {
 Future<void> loadVerificationFromLocalStorage() async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_kVerificationStorageKey);
+    final raw = prefs.getString(_userScopedKey(_kVerificationStorageKey));
     if (raw != null && raw.isNotEmpty) {
       final decoded = jsonDecode(raw);
       if (decoded is Map) {
@@ -1332,9 +1882,63 @@ Future<void> loadVerificationFromLocalStorage() async {
   }
 }
 
+String _safeCurrentFirebaseUid() {
+  try {
+    return FirebaseAuth.instance.currentUser?.uid ?? "";
+  } catch (_) {
+    return "";
+  }
+}
+
+/// Checks whether the active user has been approved as an Owner/Host.
+/// Per business logic: Having an approved vehicle is mandatory to become an owner.
+/// CNIC approval alone does NOT make a user an owner.
+bool isUserApprovedHost() {
+  if (activeUserRole == "admin") return true;
+
+  final currentEmail = (activeUserEmail.isNotEmpty ? activeUserEmail : email).trim().toLowerCase();
+  final curUid = (activeUserId.isNotEmpty ? activeUserId : _safeCurrentFirebaseUid()).trim();
+
+  // User MUST own at least one approved car (or car with pending updates) in the fleet
+  return allCarsList.any((c) =>
+      c.isUserCar &&
+      (c.isApproved || c.approvalStatus == "approved" || c.approvalStatus == "pending_update") &&
+      (c.isOwnedBy(currentEmail) || (curUid.isNotEmpty && c.ownerId == curUid)));
+}
+
+/// Get the active host application status for the current user:
+/// Returns "approved", "pending", "rejected", or "none"
+String getUserHostApplicationStatus() {
+  if (activeUserRole == "admin") return "approved";
+
+  final currentEmail = (activeUserEmail.isNotEmpty ? activeUserEmail : email).trim().toLowerCase();
+  final curUid = (activeUserId.isNotEmpty ? activeUserId : _safeCurrentFirebaseUid()).trim();
+
+  final myCars = allCarsList.where((c) =>
+      c.isUserCar &&
+      (c.isOwnedBy(currentEmail) || (curUid.isNotEmpty && c.ownerId == curUid))).toList();
+
+  // 1. Mandatory requirement: User MUST have at least one approved car
+  if (myCars.any((c) => c.approvalStatus == "approved" || c.approvalStatus == "pending_update" || c.isApproved)) {
+    return "approved";
+  }
+
+  // 2. If user has any cars pending admin review, status is pending
+  if (myCars.any((c) => c.approvalStatus == "pending")) return "pending";
+
+  // 3. If user has any rejected cars
+  if (myCars.any((c) => c.approvalStatus == "rejected")) return "rejected";
+
+  // 4. If user submitted host onboarding and verification is pending
+  if (currentUserVerification.isPending && currentUserVerification.isHostVerified) return "pending";
+  if (currentUserVerification.isRejected && currentUserVerification.isHostVerified) return "rejected";
+
+  return "none";
+}
+
 // ================= 2. FAVORITES SYSTEM =================
-const String _kFavoritesStorageKey = "saved_favorite_car_ids_v1";
-final Set<String> favoriteCarIds = <String>{"1", "3"};
+const String _kFavoritesStorageKey = "saved_favorite_car_ids_v2";
+final Set<String> favoriteCarIds = <String>{};
 
 bool isCarFavorite(String carId) => favoriteCarIds.contains(carId);
 
@@ -1345,25 +1949,44 @@ Future<void> toggleFavoriteCar(String carId) async {
     favoriteCarIds.add(carId);
   }
   await saveFavoritesToLocalStorage();
+  if (activeUserEmail.isNotEmpty) {
+    FirestoreService.syncFavoritesToFirestore(activeUserEmail, favoriteCarIds.toList());
+  }
 }
 
 List<CarItem> getFavoriteCars() {
-  return allCarsList.where((c) => favoriteCarIds.contains(c.id)).toList();
+  return allCarsList.where((c) =>
+      favoriteCarIds.contains(c.id) &&
+      !deletedCarIds.contains(c.id) &&
+      !deletedCarIds.contains(c.id.trim())).toList();
 }
 
 Future<void> saveFavoritesToLocalStorage() async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_kFavoritesStorageKey, favoriteCarIds.toList());
+    await prefs.setStringList(_userScopedKey(_kFavoritesStorageKey), favoriteCarIds.toList());
   } catch (_) {}
 }
 
 Future<void> loadFavoritesFromLocalStorage() async {
   try {
+    favoriteCarIds.clear();
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_kFavoritesStorageKey);
+    var list = prefs.getStringList(_userScopedKey(_kFavoritesStorageKey));
+    if (list == null) {
+      final oldList = prefs.getStringList(_userScopedKey("saved_favorite_car_ids_v1"));
+      if (oldList != null) {
+        // Discard any legacy default mock favorites ("1", "3")
+        final setOld = oldList.toSet();
+        if (setOld.length <= 2 && setOld.every((id) => id == "1" || id == "3")) {
+          list = [];
+        } else {
+          list = oldList.where((id) => id != "1" && id != "3").toList();
+        }
+        await prefs.setStringList(_userScopedKey(_kFavoritesStorageKey), list);
+      }
+    }
     if (list != null) {
-      favoriteCarIds.clear();
       favoriteCarIds.addAll(list);
     }
   } catch (_) {}
@@ -1375,83 +1998,134 @@ const String _kChatStorageKey = "saved_chat_messages_v1";
 class ChatMessage {
   final String id;
   final String bookingId;
+  final String carId;
   final String carName;
+  final String senderId;
   final String senderEmail;
   final String senderName;
+  final String ownerId;
+  final String ownerEmail;
+  final String customerId;
+  final String customerEmail;
   final String text;
   final DateTime timestamp;
   final bool isFromHost;
+  final bool isAutomated;
+  final bool isRead;
 
   const ChatMessage({
     required this.id,
     required this.bookingId,
+    this.carId = "",
     required this.carName,
+    this.senderId = "",
     required this.senderEmail,
     required this.senderName,
+    this.ownerId = "",
+    this.ownerEmail = "",
+    this.customerId = "",
+    this.customerEmail = "",
     required this.text,
     required this.timestamp,
     required this.isFromHost,
+    this.isAutomated = false,
+    this.isRead = false,
   });
 
   Map<String, dynamic> toJson() => {
     "id": id,
     "bookingId": bookingId,
+    "carId": carId,
     "carName": carName,
+    "senderId": senderId,
     "senderEmail": senderEmail,
     "senderName": senderName,
+    "ownerId": ownerId,
+    "ownerEmail": ownerEmail,
+    "customerId": customerId,
+    "customerEmail": customerEmail,
     "text": text,
     "timestamp": timestamp.toIso8601String(),
     "isFromHost": isFromHost,
+    "isAutomated": isAutomated,
+    "isRead": isRead,
   };
 
   factory ChatMessage.fromJson(Map<dynamic, dynamic> json) => ChatMessage(
     id: json["id"]?.toString() ?? "",
     bookingId: json["bookingId"]?.toString() ?? "",
+    carId: json["carId"]?.toString() ?? "",
     carName: json["carName"]?.toString() ?? "",
+    senderId: json["senderId"]?.toString() ?? "",
     senderEmail: json["senderEmail"]?.toString() ?? "",
     senderName: json["senderName"]?.toString() ?? "",
+    ownerId: json["ownerId"]?.toString() ?? "",
+    ownerEmail: json["ownerEmail"]?.toString() ?? "",
+    customerId: json["customerId"]?.toString() ?? "",
+    customerEmail: json["customerEmail"]?.toString() ?? "",
     text: json["text"]?.toString() ?? "",
     timestamp: json["timestamp"] != null ? (DateTime.tryParse(json["timestamp"].toString()) ?? DateTime.now()) : DateTime.now(),
     isFromHost: json["isFromHost"] == true || json["isFromHost"]?.toString() == "true",
+    isAutomated: json["isAutomated"] == true || json["isAutomated"]?.toString() == "true",
+    isRead: json["isRead"] == true || json["isRead"]?.toString() == "true",
   );
 }
 
-final List<ChatMessage> chatMessagesList = [
-  ChatMessage(
-    id: "msg_1",
-    bookingId: "demo",
-    carName: "Honda Civic RS Turbo",
-    senderEmail: "host@example.com",
-    senderName: "Car Host (Ali)",
-    text: "As-salamu alaykum! Vehicle is cleaned and fueled for your trip.",
-    timestamp: DateTime.now().subtract(const Duration(hours: 3)),
-    isFromHost: true,
-  ),
+final List<ChatMessage> chatMessagesList = [];
 
-];
+List<ChatMessage> getMessagesForBooking(
+  String bookingId,
+  String carName, {
+  String carId = "",
+  String userEmail = "",
+  String otherEmail = "",
+  String customerId = "",
+  String customerEmail = "",
+}) {
+  final cleanCustId = customerId.trim();
+  final cleanCustEmail = (customerEmail.isNotEmpty ? customerEmail : userEmail).trim().toLowerCase();
 
-List<ChatMessage> getMessagesForBooking(String bookingId, String carName) {
-  final filtered = chatMessagesList.where((m) =>
-      m.bookingId == bookingId ||
-      (m.carName.trim().toLowerCase() == carName.trim().toLowerCase() && carName.isNotEmpty)).toList();
-  if (filtered.isEmpty) {
-    return chatMessagesList;
-  }
-  return filtered;
+  return chatMessagesList.where((m) {
+    // 1. Direct booking ID match
+    if (bookingId.isNotEmpty && m.bookingId == bookingId) {
+      return true;
+    }
+
+    // 2. Pre-booking chat match for the same car & same customer
+    final isPreBookingMsg = m.bookingId.startsWith("pre_");
+    final matchesCar = (carId.isNotEmpty && m.carId == carId) ||
+        (carName.isNotEmpty && m.carName.trim().toLowerCase() == carName.trim().toLowerCase());
+
+    final matchesCustomer = (cleanCustId.isNotEmpty && m.customerId == cleanCustId) ||
+        (cleanCustEmail.isNotEmpty && (
+            m.customerEmail.trim().toLowerCase() == cleanCustEmail ||
+            (!m.isFromHost && m.senderEmail.trim().toLowerCase() == cleanCustEmail)));
+
+    if (isPreBookingMsg && matchesCar && matchesCustomer) {
+      return true;
+    }
+
+    // 3. Fallback: if bookingId is pre-booking ID, also match real booking messages for the same car/customer
+    if (bookingId.startsWith("pre_") && matchesCar && matchesCustomer) {
+      return true;
+    }
+
+    return false;
+  }).toList();
 }
 
 Future<void> saveChatMessagesToLocalStorage() async {
   try {
     final prefs = await SharedPreferences.getInstance();
     final list = chatMessagesList.map((m) => m.toJson()).toList();
-    await prefs.setString(_kChatStorageKey, jsonEncode(list));
+    await prefs.setString(_userScopedKey(_kChatStorageKey), jsonEncode(list));
   } catch (_) {}
 }
 
 Future<void> loadChatMessagesFromLocalStorage() async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_kChatStorageKey);
+    final raw = prefs.getString(_userScopedKey(_kChatStorageKey));
     if (raw != null && raw.isNotEmpty) {
       final decoded = jsonDecode(raw);
       if (decoded is List) {
@@ -1464,6 +2138,39 @@ Future<void> loadChatMessagesFromLocalStorage() async {
       }
     }
   } catch (_) {}
+}
+
+void markLocalMessagesAsRead(List<String> messageIds) {
+  if (messageIds.isEmpty) return;
+  final idSet = messageIds.toSet();
+  bool changed = false;
+  for (int i = 0; i < chatMessagesList.length; i++) {
+    if (idSet.contains(chatMessagesList[i].id) && !chatMessagesList[i].isRead) {
+      final old = chatMessagesList[i];
+      chatMessagesList[i] = ChatMessage(
+        id: old.id,
+        bookingId: old.bookingId,
+        carId: old.carId,
+        carName: old.carName,
+        senderId: old.senderId,
+        senderEmail: old.senderEmail,
+        senderName: old.senderName,
+        ownerId: old.ownerId,
+        ownerEmail: old.ownerEmail,
+        customerId: old.customerId,
+        customerEmail: old.customerEmail,
+        text: old.text,
+        timestamp: old.timestamp,
+        isFromHost: old.isFromHost,
+        isAutomated: old.isAutomated,
+        isRead: true,
+      );
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveChatMessagesToLocalStorage();
+  }
 }
 
 // ================= 4. REVIEWS & RATINGS SYSTEM =================
@@ -1523,41 +2230,7 @@ class ReviewItem {
   }
 }
 
-final List<ReviewItem> carReviewsList = [
-  ReviewItem(
-    id: "rev_1",
-    carId: "5",
-    carName: "Honda Civic RS Turbo",
-    userEmail: "sami@example.com",
-    userName: "Sami Khan",
-    rating: 5.0,
-    comment: "Outstanding experience! The car was super clean, AC was chilled, and the host was very cooperative. Highly recommended for trips to Murree or motorway.",
-    tags: const ["Clean Interior", "Chilled AC", "Punctual Host", "Smooth Engine"],
-    date: DateTime.now().subtract(const Duration(days: 3)),
-  ),
-  ReviewItem(
-    id: "rev_2",
-    carId: "1",
-    carName: "Mercedes Benz C-Class",
-    userEmail: "ali@example.com",
-    userName: "Hamza Tariq",
-    rating: 4.9,
-    comment: "Rented with driver for a family wedding. The driver was very respectful and arrived 15 minutes before time. VIP protocol throughout.",
-    tags: const ["Punctual Host", "Luxury Feel", "Safe Driver"],
-    date: DateTime.now().subtract(const Duration(days: 6)),
-  ),
-  ReviewItem(
-    id: "rev_3",
-    carId: "3",
-    carName: "Toyota Land Cruiser",
-    userEmail: "bilal@example.com",
-    userName: "Bilal Ahmed",
-    rating: 4.8,
-    comment: "Took it for a 4-day tour to northern Pakistan. Flawless 4x4 drive, comfortable 7 seats, no mechanical issues whatsoever.",
-    tags: const ["Great 4x4", "Spacious 7-Seater", "Smooth Engine"],
-    date: DateTime.now().subtract(const Duration(days: 10)),
-  ),
-];
+final List<ReviewItem> carReviewsList = [];
 
 List<ReviewItem> getReviewsForCar(String carName, {String? carId}) {
   return carReviewsList.where((r) =>
@@ -1567,6 +2240,16 @@ List<ReviewItem> getReviewsForCar(String carName, {String? carId}) {
 }
 
 Future<void> addCarReview(ReviewItem review) async {
+  final matchingCar = allCarsList.firstWhere(
+    (c) =>
+        (review.carId.isNotEmpty && c.id == review.carId) ||
+        c.name.trim().toLowerCase() == review.carName.trim().toLowerCase(),
+    orElse: () => CarItem(id: "", name: "", brand: "", price: "", rating: 5.0, image: ""),
+  );
+  if (matchingCar.id.isNotEmpty && (matchingCar.isOwnedBy(review.userEmail) || matchingCar.isOwnedByActiveUser)) {
+    debugPrint("⛔ [Reviews] Blocked: Car owner cannot review their own car.");
+    return;
+  }
   carReviewsList.insert(0, review);
   await saveReviewsToLocalStorage();
   FirestoreService.saveReviewToFirestore(review);
@@ -1598,7 +2281,7 @@ Future<void> loadReviewsFromLocalStorage() async {
   } catch (_) {}
 }
 
-// ================= 5. HOST EARNINGS & BANK PAYOUT SYSTEM =================
+// ================= 5. OWNER PAYMENT DETAILS SYSTEM =================
 const String _kPayoutStorageKey = "saved_host_payout_settings_v1";
 
 class HostPayoutSettings {
@@ -1606,46 +2289,79 @@ class HostPayoutSettings {
   final String bankName;
   final String accountTitle;
   final String accountNumberOrIban;
+  final String bankIban;
+  final String easypaisaTitle;
+  final String easypaisaNumber;
+  final String jazzcashTitle;
+  final String jazzcashNumber;
   final int totalWithdrawn;
 
   const HostPayoutSettings({
     this.payoutMethod = "Bank Account",
     this.bankName = "Meezan Bank Limited",
-    this.accountTitle = "Muhammad Sami",
-    this.accountNumberOrIban = "PK36MEZN0001234567890123",
+    this.accountTitle = "",
+    this.accountNumberOrIban = "",
+    this.bankIban = "",
+    this.easypaisaTitle = "",
+    this.easypaisaNumber = "",
+    this.jazzcashTitle = "",
+    this.jazzcashNumber = "",
     this.totalWithdrawn = 0,
   });
+
+  String get effectiveIban {
+    if (bankIban.trim().isNotEmpty) return bankIban.trim();
+    if (accountNumberOrIban.trim().isNotEmpty) return accountNumberOrIban.trim();
+    return "";
+  }
+
+  bool get hasBank => bankName.trim().isNotEmpty && accountTitle.trim().isNotEmpty && effectiveIban.isNotEmpty;
+  bool get hasEasypaisa => easypaisaTitle.trim().isNotEmpty && easypaisaNumber.trim().isNotEmpty;
+  bool get hasJazzcash => jazzcashTitle.trim().isNotEmpty && jazzcashNumber.trim().isNotEmpty;
+  bool get hasAnyMethod => hasBank || hasEasypaisa || hasJazzcash;
 
   Map<String, dynamic> toJson() => {
     "payoutMethod": payoutMethod,
     "bankName": bankName,
     "accountTitle": accountTitle,
     "accountNumberOrIban": accountNumberOrIban,
+    "bankIban": bankIban,
+    "easypaisaTitle": easypaisaTitle,
+    "easypaisaNumber": easypaisaNumber,
+    "jazzcashTitle": jazzcashTitle,
+    "jazzcashNumber": jazzcashNumber,
     "totalWithdrawn": totalWithdrawn,
   };
 
   factory HostPayoutSettings.fromJson(Map<dynamic, dynamic> json) => HostPayoutSettings(
     payoutMethod: json["payoutMethod"]?.toString() ?? "Bank Account",
     bankName: json["bankName"]?.toString() ?? "Meezan Bank Limited",
-    accountTitle: json["accountTitle"]?.toString() ?? "Muhammad Sami",
-    accountNumberOrIban: json["accountNumberOrIban"]?.toString() ?? "PK36MEZN0001234567890123",
+    accountTitle: json["accountTitle"]?.toString() ?? "",
+    accountNumberOrIban: json["accountNumberOrIban"]?.toString() ?? "",
+    bankIban: json["bankIban"]?.toString() ?? json["accountNumberOrIban"]?.toString() ?? "",
+    easypaisaTitle: json["easypaisaTitle"]?.toString() ?? "",
+    easypaisaNumber: json["easypaisaNumber"]?.toString() ?? "",
+    jazzcashTitle: json["jazzcashTitle"]?.toString() ?? "",
+    jazzcashNumber: json["jazzcashNumber"]?.toString() ?? "",
     totalWithdrawn: int.tryParse(json["totalWithdrawn"]?.toString() ?? "0") ?? 0,
   );
 }
+
+typedef OwnerPaymentDetails = HostPayoutSettings;
 
 HostPayoutSettings currentHostPayout = const HostPayoutSettings();
 
 Future<void> savePayoutSettingsToLocalStorage() async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kPayoutStorageKey, jsonEncode(currentHostPayout.toJson()));
+    await prefs.setString(_userScopedKey(_kPayoutStorageKey), jsonEncode(currentHostPayout.toJson()));
   } catch (_) {}
 }
 
 Future<void> loadPayoutSettingsFromLocalStorage() async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_kPayoutStorageKey);
+    final raw = prefs.getString(_userScopedKey(_kPayoutStorageKey));
     if (raw != null && raw.isNotEmpty) {
       final decoded = jsonDecode(raw);
       if (decoded is Map) {
@@ -1655,14 +2371,16 @@ Future<void> loadPayoutSettingsFromLocalStorage() async {
   } catch (_) {}
 }
 
-// Universal Master Loader
+// Universal Master Loader (Parallelized for maximum speed)
 Future<void> loadAllAppCustomData() async {
-  await loadCarsFromLocalStorage();
-  await loadBookingsFromLocalStorage();
-  await loadReadNotificationsFromLocalStorage();
-  await loadVerificationFromLocalStorage();
-  await loadFavoritesFromLocalStorage();
-  await loadChatMessagesFromLocalStorage();
-  await loadReviewsFromLocalStorage();
-  await loadPayoutSettingsFromLocalStorage();
+  await Future.wait([
+    loadCarsFromLocalStorage(),
+    loadBookingsFromLocalStorage(),
+    loadReadNotificationsFromLocalStorage(),
+    loadVerificationFromLocalStorage(),
+    loadFavoritesFromLocalStorage(),
+    loadChatMessagesFromLocalStorage(),
+    loadReviewsFromLocalStorage(),
+    loadPayoutSettingsFromLocalStorage(),
+  ]);
 }

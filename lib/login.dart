@@ -1,10 +1,13 @@
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'theme.dart';
 import 'signup.dart';
 import 'home.dart';
 import 'user_data.dart';
 import 'auth_service.dart';
+import 'firestore_service.dart';
+import 'admin_panel_screen.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -19,6 +22,102 @@ class _LoginPageState extends State<LoginPage> {
   final AuthService _authService = AuthService();
   bool _isLoading = false;
   bool _obscurePassword = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkExistingSession();
+    });
+  }
+
+  Future<void> _checkExistingSession() async {
+    final current = _authService.currentUser;
+    if (current != null) {
+      try {
+        // Fetch profile from Firestore — role is the ONLY admin indicator
+        final profile = await _authService.getCurrentUserProfile();
+        final userEmail = (current.email ?? profile?['email']?.toString() ?? "").trim();
+        final userName = (profile?['name']?.toString() ?? current.displayName ?? "User").trim();
+        final userRole = (profile?['role']?.toString() ?? "").toLowerCase().trim();
+
+        if (userRole == "admin") {
+          activeUserId = current.uid;
+          activeUserEmail = userEmail;
+          activeUserName = userName.isNotEmpty ? userName : "Administrator";
+          activeUserRole = "admin";
+          name = activeUserName;
+          email = userEmail;
+
+          SharedPreferences.getInstance().then((prefs) {
+            prefs.setString("app_user_active_id", current.uid);
+            prefs.setString("app_user_active_email", userEmail);
+            prefs.setString("app_user_active_name", activeUserName);
+            prefs.setString("app_user_role", "admin");
+          });
+
+          if (mounted) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => AdminPanelScreen(
+                  adminEmail: userEmail,
+                  adminName: activeUserName,
+                ),
+              ),
+            );
+          }
+          return;
+        }
+
+        // Only users with an approved vehicle listing can enter Owner Mode!
+        // CNIC verification alone does not grant owner status.
+        final bool hasApprovedCars = allCarsList.any((c) =>
+            c.isUserCar &&
+            (c.isApproved || c.approvalStatus == "approved" || c.approvalStatus == "pending_update") &&
+            ((current.uid.isNotEmpty && c.ownerId == current.uid) ||
+             (userEmail.isNotEmpty && c.ownerEmail.trim().toLowerCase() == userEmail.trim().toLowerCase())));
+
+        final bool isOwner = hasApprovedCars;
+
+        activeUserId = current.uid;
+        activeUserEmail = userEmail;
+        activeUserName = userName;
+        activeUserRole = isOwner ? "owner" : "customer";
+        name = userName;
+        email = userEmail;
+
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString("app_user_active_id", current.uid);
+        await prefs.setString("app_user_active_email", userEmail);
+        await prefs.setString("app_user_active_name", userName);
+        await prefs.setString("app_user_role", activeUserRole);
+        await prefs.setBool("app_user_is_owner_mode", isOwner);
+
+        if (profile != null) {
+          currentUserVerification = VerificationData.fromJson(profile);
+          await saveVerificationToLocalStorage();
+        }
+
+        // Initialize live listeners and sync bookings for the authenticated user
+        FirestoreService.initRealtimeListeners();
+        FirestoreService.syncBookingsWithFirestore();
+
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => HomePage(
+                name: userName,
+                email: userEmail,
+                initialIsOwner: isOwner,
+              ),
+            ),
+          );
+        }
+      } catch (_) {}
+    }
+  }
 
   @override
   void dispose() {
@@ -46,22 +145,6 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     try {
-      // Demo / Local bypass if using demo credentials
-      if ((email.isNotEmpty && enteredEmail == email && enteredPassword == password) ||
-          (enteredEmail == "sami@example.com" && enteredPassword == "123")) {
-        if (!mounted) return;
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => HomePage(
-              name: name.isNotEmpty ? name : "Sami",
-              email: enteredEmail,
-            ),
-          ),
-        );
-        return;
-      }
-
       // Real Firebase Login
       final userData = await _authService.signIn(
         email: enteredEmail,
@@ -71,30 +154,80 @@ class _LoginPageState extends State<LoginPage> {
       if (!mounted) return;
 
       final userName = userData?['name']?.toString() ?? "User";
+      final userId = userData?['uid']?.toString() ?? (_authService.currentUser?.uid ?? "");
+      final userRole = (userData?['role']?.toString() ?? "customer").toLowerCase();
+
+      if (userRole == "admin") {
+        // Admin Login — role verified from Firestore
+        activeUserId = userId;
+        activeUserName = userName.isNotEmpty ? userName : "Administrator";
+        activeUserEmail = enteredEmail;
+        activeUserRole = "admin";
+        name = activeUserName;
+        email = enteredEmail;
+
+        SharedPreferences.getInstance().then((prefs) {
+          prefs.setString("app_user_active_id", userId);
+          prefs.setString("app_user_active_email", enteredEmail);
+          prefs.setString("app_user_active_name", activeUserName);
+          prefs.setString("app_user_role", "admin");
+        });
+
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => AdminPanelScreen(
+              adminEmail: enteredEmail,
+              adminName: activeUserName,
+            ),
+          ),
+        );
+        return;
+      }
+
+      // Normal Customer / Owner Login - Approved car is mandatory for Owner Mode
+      final bool hasApprovedCars = allCarsList.any((c) =>
+          c.isUserCar &&
+          (c.isApproved || c.approvalStatus == "approved" || c.approvalStatus == "pending_update") &&
+          ((userId.isNotEmpty && c.ownerId == userId) ||
+           c.ownerEmail.trim().toLowerCase() == enteredEmail.trim().toLowerCase()));
+
+      final bool isOwner = hasApprovedCars;
+
+      chatMessagesList.clear();
       name = userName;
       email = enteredEmail;
+      activeUserId = userId;
+      activeUserName = userName;
+      activeUserEmail = enteredEmail;
+      activeUserRole = isOwner ? "owner" : "customer";
 
-      // Restore verification status from Firestore if verified
-      if (userData != null && userData['isVerified'] == true) {
-        currentUserVerification = VerificationData(
-          cnicNumber: userData['cnicNumber']?.toString() ?? '',
-          cnicFrontPath: '',
-          cnicBackPath: '',
-          licenseNumber: userData['licenseNumber']?.toString() ?? '',
-          licenseExpiry: userData['licenseExpiry']?.toString() ?? '',
-          licenseImagePath: '',
-          status: 'verified',
-          verifiedAt: DateTime.now(),
-        );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString("app_user_active_id", userId);
+      await prefs.setString("app_user_active_email", enteredEmail.trim().toLowerCase());
+      await prefs.setString("app_user_active_name", userName.trim());
+      await prefs.setString("app_user_role", activeUserRole);
+      await prefs.setBool("app_user_is_owner_mode", isOwner);
+
+      // Restore verification status from Firestore
+      if (userData != null) {
+        currentUserVerification = VerificationData.fromJson(userData);
         await saveVerificationToLocalStorage();
       }
 
+      // Initialize live listeners and sync bookings for the authenticated user
+      FirestoreService.initRealtimeListeners();
+      FirestoreService.syncBookingsWithFirestore();
+
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
           builder: (context) => HomePage(
             name: userName,
             email: enteredEmail,
+            initialIsOwner: isOwner,
           ),
         ),
       );
@@ -284,6 +417,7 @@ class _LoginPageState extends State<LoginPage> {
               TextField(
                 controller: passwordController,
                 obscureText: _obscurePassword,
+                keyboardType: TextInputType.visiblePassword,
                 enableSuggestions: false,
                 autocorrect: false,
                 style: const TextStyle(color: Colors.white),
@@ -392,49 +526,6 @@ SizedBox(
         color: Colors.white,
       ),
     ),
-  ),
-),
-
-const SizedBox(height: 16),
-
-// Quick Demo Fill Card
-Container(
-  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-  decoration: BoxDecoration(
-    color: const Color(0xFF1E1E1E),
-    borderRadius: BorderRadius.circular(12),
-    border: Border.all(color: AppTheme.primary.withOpacity(0.3)),
-  ),
-  child: Row(
-    children: [
-      const Icon(Icons.key_outlined, color: AppTheme.primary, size: 18),
-      const SizedBox(width: 10),
-      const Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              "Demo: sami@example.com",
-              style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
-            ),
-            Text(
-              "Pass: 123",
-              style: TextStyle(color: Colors.grey, fontSize: 11),
-            ),
-          ],
-        ),
-      ),
-      TextButton(
-        onPressed: () {
-          emailController.text = "sami@example.com";
-          passwordController.text = "123";
-        },
-        child: const Text(
-          "Auto Fill",
-          style: TextStyle(color: AppTheme.primaryLight, fontWeight: FontWeight.bold, fontSize: 13),
-        ),
-      ),
-    ],
   ),
 ),
 

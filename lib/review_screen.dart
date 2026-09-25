@@ -44,6 +44,28 @@ class _ReviewScreenState extends State<ReviewScreen> {
   }
 
   Future<void> _submitReview() async {
+    // Prevent vehicle owner from reviewing their own vehicle
+    final matchingCar = allCarsList.firstWhere(
+      (c) =>
+          (widget.carId.isNotEmpty && c.id == widget.carId) ||
+          c.name.trim().toLowerCase() == widget.carName.trim().toLowerCase(),
+      orElse: () => CarItem(id: "", name: "", brand: "", price: "", rating: 5.0, image: ""),
+    );
+
+    final reviewerEmail = widget.userEmail.trim().toLowerCase();
+    final isOwnerReviewing = matchingCar.id.isNotEmpty &&
+        (matchingCar.isOwnedBy(reviewerEmail) || matchingCar.isOwnedByActiveUser);
+
+    if (isOwnerReviewing) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("⛔ Vehicle hosts cannot review their own vehicles."),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
     if (_commentController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Please write a few words about your rental experience")),
@@ -81,6 +103,16 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final matchingCar = allCarsList.firstWhere(
+      (c) =>
+          (widget.carId.isNotEmpty && c.id == widget.carId) ||
+          c.name.trim().toLowerCase() == widget.carName.trim().toLowerCase(),
+      orElse: () => CarItem(id: "", name: "", brand: "", price: "", rating: 5.0, image: ""),
+    );
+    final reviewerEmail = widget.userEmail.trim().toLowerCase();
+    final isOwnerReviewing = matchingCar.id.isNotEmpty &&
+        (matchingCar.isOwnedBy(reviewerEmail) || matchingCar.isOwnedByActiveUser);
+
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       appBar: AppBar(
@@ -93,6 +125,28 @@ class _ReviewScreenState extends State<ReviewScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            if (isOwnerReviewing)
+              Container(
+                margin: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.redAccent.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.block, color: Colors.redAccent, size: 20),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        "You are the owner of this vehicle. Reviews can only be submitted by verified renters.",
+                        style: TextStyle(color: Colors.white, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             const SizedBox(height: 10),
             Container(
               padding: const EdgeInsets.all(16),
@@ -119,26 +173,31 @@ class _ReviewScreenState extends State<ReviewScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: List.generate(5, (index) {
-                final starIndex = index + 1;
+                final starNum = index + 1;
                 return IconButton(
-                  iconSize: 40,
+                  iconSize: 38,
+                  onPressed: isOwnerReviewing
+                      ? null
+                      : () {
+                          setState(() {
+                            _selectedRating = starNum.toDouble();
+                          });
+                        },
                   icon: Icon(
-                    starIndex <= _selectedRating ? Icons.star : Icons.star_border,
+                    starNum <= _selectedRating ? Icons.star : Icons.star_border,
                     color: Colors.amber,
                   ),
-                  onPressed: () {
-                    setState(() => _selectedRating = starIndex.toDouble());
-                  },
                 );
               }),
             ),
+            const SizedBox(height: 6),
             Text(
               _getRatingDescription(_selectedRating),
-              style: const TextStyle(color: AppTheme.primaryLight, fontSize: 14, fontWeight: FontWeight.bold),
+              style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 28),
+            const SizedBox(height: 24),
 
-            // EXPERIENCE TAGS
+            // QUICK EXPERIENCE TAGS
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
@@ -146,7 +205,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
                 style: TextStyle(color: Colors.grey[300], fontSize: 14, fontWeight: FontWeight.bold),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -155,43 +214,53 @@ class _ReviewScreenState extends State<ReviewScreen> {
                 return FilterChip(
                   label: Text(tag),
                   selected: isSelected,
-                  selectedColor: AppTheme.primary,
+                  onSelected: isOwnerReviewing
+                      ? null
+                      : (selected) {
+                          setState(() {
+                            if (selected) {
+                              _selectedTags.add(tag);
+                            } else {
+                              _selectedTags.remove(tag);
+                            }
+                          });
+                        },
+                  selectedColor: AppTheme.primary.withOpacity(0.3),
+                  checkmarkColor: AppTheme.primary,
                   backgroundColor: const Color(0xFF1E1E1E),
                   labelStyle: TextStyle(
                     color: isSelected ? Colors.white : Colors.grey[400],
                     fontSize: 12,
                     fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                   ),
-                  onSelected: (selected) {
-                    setState(() {
-                      if (selected) {
-                        _selectedTags.add(tag);
-                      } else {
-                        _selectedTags.remove(tag);
-                      }
-                    });
-                  },
+                  side: BorderSide(
+                    color: isSelected ? AppTheme.primary : Colors.white12,
+                  ),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 );
               }).toList(),
             ),
             const SizedBox(height: 24),
 
-            // COMMENT BOX
+            // DETAILED REVIEW TEXT
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                "Detailed Feedback",
+                "Write Detailed Feedback",
                 style: TextStyle(color: Colors.grey[300], fontSize: 14, fontWeight: FontWeight.bold),
               ),
             ),
             const SizedBox(height: 10),
             TextField(
               controller: _commentController,
+              enabled: !isOwnerReviewing,
               maxLines: 4,
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: Colors.white, fontSize: 14),
               decoration: InputDecoration(
-                hintText: "Share tips for other renters (e.g. car cleanliness, fuel efficiency, communication with host)...",
-                hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
+                hintText: isOwnerReviewing
+                    ? "Owners cannot review their own car."
+                    : "Describe the car condition, cleanliness, pickup experience, and host communication...",
+                hintStyle: TextStyle(color: Colors.grey[600], fontSize: 13),
                 filled: true,
                 fillColor: const Color(0xFF1E1E1E),
                 border: OutlineInputBorder(
@@ -211,18 +280,18 @@ class _ReviewScreenState extends State<ReviewScreen> {
               width: double.infinity,
               height: 52,
               child: ElevatedButton.icon(
-                onPressed: _isSubmitting ? null : _submitReview,
+                onPressed: (_isSubmitting || isOwnerReviewing) ? null : _submitReview,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.primary,
+                  backgroundColor: isOwnerReviewing ? Colors.grey.shade800 : AppTheme.primary,
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
                 icon: _isSubmitting
                     ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.send),
-                label: const Text(
-                  "Submit Trip Review",
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                    : Icon(isOwnerReviewing ? Icons.block : Icons.send),
+                label: Text(
+                  isOwnerReviewing ? "Owner Cannot Review Own Car" : "Submit Trip Review",
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                 ),
               ),
             ),

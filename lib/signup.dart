@@ -16,6 +16,7 @@ class _SignupState extends State<Signup> {
   final AuthService _authService = AuthService();
   bool _isLoading = false;
   bool _obscurePassword = true;
+  String _selectedRole = "customer";
 
   @override
   void dispose() {
@@ -54,33 +55,50 @@ class _SignupState extends State<Signup> {
       _isLoading = true;
     });
 
-    final error = await _authService.signUp(
-      name: enteredName,
-      email: enteredEmail,
-      password: enteredPassword,
-    );
+    try {
+      final error = await _authService.signUp(
+        name: enteredName,
+        email: enteredEmail,
+        password: enteredPassword,
+        role: _selectedRole,
+      ).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () => "Request timed out. Please try logging in.",
+      );
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    setState(() {
-      _isLoading = false;
-    });
+      setState(() {
+        _isLoading = false;
+      });
 
-    if (error != null) {
+      if (error != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Account created successfully! Please login."),
+            backgroundColor: AppTheme.primary,
+          ),
+        );
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(error),
+          content: Text("Sign up error: $e"),
           backgroundColor: Colors.redAccent,
         ),
       );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Account created successfully! Please login."),
-          backgroundColor: AppTheme.primary,
-        ),
-      );
-      Navigator.pop(context);
     }
   }
 
@@ -113,14 +131,85 @@ class _SignupState extends State<Signup> {
               const SizedBox(height: 10),
               const Center(
                 child: Text(
-                  "Sign up to start renting cars",
+                  "Sign up to start renting or listing cars",
                   style: TextStyle(
                     color: Colors.grey,
                     fontSize: 15,
                   ),
                 ),
               ),
-              const SizedBox(height: 35),
+              const SizedBox(height: 24),
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E1E1E),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white12),
+                ),
+                padding: const EdgeInsets.all(4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: InkWell(
+                        onTap: () => setState(() => _selectedRole = "customer"),
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          decoration: BoxDecoration(
+                            color: _selectedRole == "customer" ? AppTheme.primary : Colors.transparent,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          alignment: Alignment.center,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.person, size: 16, color: _selectedRole == "customer" ? Colors.white : Colors.grey),
+                              const SizedBox(width: 6),
+                              Text(
+                                "Customer (Renter)",
+                                style: TextStyle(
+                                  color: _selectedRole == "customer" ? Colors.white : Colors.grey,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: InkWell(
+                        onTap: () => setState(() => _selectedRole = "owner"),
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          decoration: BoxDecoration(
+                            color: _selectedRole == "owner" ? AppTheme.primary : Colors.transparent,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          alignment: Alignment.center,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.directions_car, size: 16, color: _selectedRole == "owner" ? Colors.white : Colors.grey),
+                              const SizedBox(width: 6),
+                              Text(
+                                "Car Owner (Host)",
+                                style: TextStyle(
+                                  color: _selectedRole == "owner" ? Colors.white : Colors.grey,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 25),
               const Text(
                 "Full Name",
                 style: TextStyle(
@@ -195,6 +284,7 @@ class _SignupState extends State<Signup> {
               TextField(
                 controller: passwordController,
                 obscureText: _obscurePassword,
+                keyboardType: TextInputType.visiblePassword,
                 enableSuggestions: false,
                 autocorrect: false,
                 style: const TextStyle(

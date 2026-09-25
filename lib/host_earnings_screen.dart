@@ -1,6 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'theme.dart';
 import 'user_data.dart';
+import 'firestore_service.dart';
+
+/// Text formatter to automatically convert all user input to UPPERCASE
+class UpperCaseTextFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    return TextEditingValue(
+      text: newValue.text.toUpperCase(),
+      selection: newValue.selection,
+    );
+  }
+}
 
 class HostEarningsScreen extends StatefulWidget {
   const HostEarningsScreen({super.key});
@@ -10,452 +26,547 @@ class HostEarningsScreen extends StatefulWidget {
 }
 
 class _HostEarningsScreenState extends State<HostEarningsScreen> {
+  // Bank Account Controllers
   late TextEditingController _bankNameController;
-  late TextEditingController _titleController;
-  late TextEditingController _ibanController;
-  String _selectedMethod = "Bank Account";
-  bool _isSavingAccount = false;
+  late TextEditingController _bankTitleController;
+  late TextEditingController _bankIbanController;
 
-  final List<String> _bankOptions = [
+  // Easypaisa Controllers
+  late TextEditingController _easypaisaTitleController;
+  late TextEditingController _easypaisaNumberController;
+
+  // JazzCash Controllers
+  late TextEditingController _jazzcashTitleController;
+  late TextEditingController _jazzcashNumberController;
+
+  bool _isSaving = false;
+
+  final List<String> _commonBanks = [
     "Meezan Bank Limited",
     "Habib Bank Limited (HBL)",
+    "United Bank Limited (UBL)",
+    "MCB Bank",
     "Bank Alfalah",
     "Allied Bank Limited (ABL)",
-    "MCB Bank",
-    "Standard Chartered",
+    "Standard Chartered Bank",
     "Faysal Bank",
+    "Bank of Punjab (BOP)",
+    "Askari Bank",
+    "Dubai Islamic Bank",
+    "BankIslami Pakistan",
+    "JS Bank",
+    "Soneri Bank",
+    "National Bank of Pakistan (NBP)",
+    "SadaPay",
+    "NayaPay",
+    "Other Bank",
   ];
 
   @override
   void initState() {
     super.initState();
-    _selectedMethod = currentHostPayout.payoutMethod;
-    _bankNameController = TextEditingController(text: currentHostPayout.bankName);
-    _titleController = TextEditingController(text: currentHostPayout.accountTitle);
-    _ibanController = TextEditingController(text: currentHostPayout.accountNumberOrIban);
+    _bankNameController = TextEditingController(
+      text: currentHostPayout.bankName.isNotEmpty ? currentHostPayout.bankName : _commonBanks.first,
+    );
+    _bankTitleController = TextEditingController(text: currentHostPayout.accountTitle.toUpperCase());
+    _bankIbanController = TextEditingController(
+      text: currentHostPayout.effectiveIban.toUpperCase(),
+    );
+
+    _easypaisaTitleController = TextEditingController(text: currentHostPayout.easypaisaTitle.toUpperCase());
+    _easypaisaNumberController = TextEditingController(text: currentHostPayout.easypaisaNumber);
+
+    _jazzcashTitleController = TextEditingController(text: currentHostPayout.jazzcashTitle.toUpperCase());
+    _jazzcashNumberController = TextEditingController(text: currentHostPayout.jazzcashNumber);
   }
 
   @override
   void dispose() {
     _bankNameController.dispose();
-    _titleController.dispose();
-    _ibanController.dispose();
+    _bankTitleController.dispose();
+    _bankIbanController.dispose();
+    _easypaisaTitleController.dispose();
+    _easypaisaNumberController.dispose();
+    _jazzcashTitleController.dispose();
+    _jazzcashNumberController.dispose();
     super.dispose();
   }
 
-  Future<void> _savePayoutAccount() async {
-    setState(() => _isSavingAccount = true);
+  String _cleanIban(String raw) => raw.replaceAll(RegExp(r'[\s\-]+'), '').toUpperCase();
+
+  bool _validateBankIbanOrAccount(String input) {
+    final clean = _cleanIban(input);
+    if (clean.length < 8 || clean.length > 34) return false;
+    // If it starts with PK (Pakistani IBAN)
+    if (clean.startsWith("PK")) {
+      // Pakistani IBAN starts with PK and has 16 to 24 alphanumeric characters for any bank
+      return RegExp(r'^PK[A-Z0-9]{14,24}$').hasMatch(clean);
+    }
+    // Standard bank account number for any Pakistani / international bank (8 to 24 alphanumeric digits)
+    return RegExp(r'^[A-Z0-9]{8,24}$').hasMatch(clean);
+  }
+
+  bool _validate11DigitPhone(String raw) {
+    final clean = raw.replaceAll(RegExp(r'\s+'), '');
+    return clean.length == 11 && RegExp(r'^\d{11}$').hasMatch(clean);
+  }
+
+  Future<void> _saveAllPaymentDetails() async {
+    final bankName = _bankNameController.text.trim();
+    final bankTitle = _bankTitleController.text.trim().toUpperCase();
+    final bankIbanClean = _cleanIban(_bankIbanController.text);
+
+    final epTitle = _easypaisaTitleController.text.trim().toUpperCase();
+    final epNumber = _easypaisaNumberController.text.replaceAll(RegExp(r'\s+'), '');
+
+    final jcTitle = _jazzcashTitleController.text.trim().toUpperCase();
+    final jcNumber = _jazzcashNumberController.text.replaceAll(RegExp(r'\s+'), '');
+
+    final bool isBankFilled = bankTitle.isNotEmpty || bankIbanClean.isNotEmpty;
+    final bool isEpFilled = epTitle.isNotEmpty || epNumber.isNotEmpty;
+    final bool isJcFilled = jcTitle.isNotEmpty || jcNumber.isNotEmpty;
+
+    if (!isBankFilled && !isEpFilled && !isJcFilled) {
+      _showErrorSnackBar("Please configure at least ONE payment method (Bank, Easypaisa, or JazzCash).");
+      return;
+    }
+
+    // Validate Bank if filled
+    if (isBankFilled) {
+      if (bankTitle.isEmpty) {
+        _showErrorSnackBar("Bank Account Title is required.");
+        return;
+      }
+      if (bankIbanClean.isEmpty) {
+        _showErrorSnackBar("Bank IBAN or Account Number is required.");
+        return;
+      }
+      if (!_validateBankIbanOrAccount(bankIbanClean)) {
+        _showErrorSnackBar("Please enter a valid IBAN (e.g. PK...) or 8-24 digit Account Number.");
+        return;
+      }
+    }
+
+    // Validate Easypaisa if filled
+    if (isEpFilled) {
+      if (epTitle.isEmpty) {
+        _showErrorSnackBar("Easypaisa Account Title is required.");
+        return;
+      }
+      if (epNumber.isEmpty) {
+        _showErrorSnackBar("Easypaisa Account Number is required.");
+        return;
+      }
+      if (!_validate11DigitPhone(epNumber)) {
+        _showErrorSnackBar("Easypaisa number must be exactly 11 digits (e.g. 03001234567).");
+        return;
+      }
+    }
+
+    // Validate JazzCash if filled
+    if (isJcFilled) {
+      if (jcTitle.isEmpty) {
+        _showErrorSnackBar("JazzCash Account Title is required.");
+        return;
+      }
+      if (jcNumber.isEmpty) {
+        _showErrorSnackBar("JazzCash Account Number is required.");
+        return;
+      }
+      if (!_validate11DigitPhone(jcNumber)) {
+        _showErrorSnackBar("JazzCash number must be exactly 11 digits (e.g. 03001234567).");
+        return;
+      }
+    }
+
+    setState(() => _isSaving = true);
 
     currentHostPayout = HostPayoutSettings(
-      payoutMethod: _selectedMethod,
-      bankName: _bankNameController.text.trim(),
-      accountTitle: _titleController.text.trim(),
-      accountNumberOrIban: _ibanController.text.trim(),
+      payoutMethod: isBankFilled ? "Bank Account" : (isEpFilled ? "EasyPaisa" : "JazzCash"),
+      bankName: isBankFilled ? bankName : "",
+      accountTitle: isBankFilled ? bankTitle : "",
+      accountNumberOrIban: isBankFilled ? bankIbanClean : "",
+      bankIban: isBankFilled ? bankIbanClean : "",
+      easypaisaTitle: isEpFilled ? epTitle : "",
+      easypaisaNumber: isEpFilled ? epNumber : "",
+      jazzcashTitle: isJcFilled ? jcTitle : "",
+      jazzcashNumber: isJcFilled ? jcNumber : "",
       totalWithdrawn: currentHostPayout.totalWithdrawn,
     );
 
     await savePayoutSettingsToLocalStorage();
-    setState(() => _isSavingAccount = false);
+
+    final hostEmail = (activeUserEmail.isNotEmpty ? activeUserEmail : email).trim().toLowerCase();
+    await FirestoreService.saveHostPayoutToFirestore(hostEmail, currentHostPayout);
+
+    setState(() => _isSaving = false);
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("✅ Bank payout account updated successfully!"),
-          backgroundColor: Colors.green,
+        SnackBar(
+          content: const Row(
+            children: [
+              Icon(Icons.check_circle_outline, color: AppTheme.primaryLight, size: 20),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  "Payment details saved successfully!",
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFF1E2A32),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: AppTheme.primary.withOpacity(0.5)),
+          ),
+          duration: const Duration(seconds: 3),
         ),
       );
     }
   }
 
-  void _requestWithdrawal(int availableAmount) {
-    if (availableAmount <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("No funds available for withdrawal at this time")),
-      );
-      return;
-    }
-
-    showDialog(
-      context: context,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E1E),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text("Request Bank Transfer?", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
           children: [
-            Text(
-              "Withdraw PKR $availableAmount to:",
-              style: const TextStyle(color: Colors.grey, fontSize: 13),
-            ),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF252525),
-                borderRadius: BorderRadius.circular(10),
+            const Icon(Icons.info_outline, color: AppTheme.primaryLight, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(currentHostPayout.bankName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                  Text(currentHostPayout.accountTitle, style: const TextStyle(color: AppTheme.primaryLight, fontSize: 12)),
-                  Text(currentHostPayout.accountNumberOrIban, style: const TextStyle(color: Colors.grey, fontSize: 11)),
-                ],
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              "Payouts via 1Link/Raast arrive in your bank within 1-2 business days.",
-              style: TextStyle(color: Colors.grey, fontSize: 11),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx),
-            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
-            onPressed: () async {
-              setState(() {
-                currentHostPayout = HostPayoutSettings(
-                  payoutMethod: currentHostPayout.payoutMethod,
-                  bankName: currentHostPayout.bankName,
-                  accountTitle: currentHostPayout.accountTitle,
-                  accountNumberOrIban: currentHostPayout.accountNumberOrIban,
-                  totalWithdrawn: currentHostPayout.totalWithdrawn + availableAmount,
-                );
-              });
-              await savePayoutSettingsToLocalStorage();
-              if (dialogCtx.mounted) Navigator.pop(dialogCtx);
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text("🎉 Transfer of PKR $availableAmount initiated to your bank!"),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              }
-            },
-            child: const Text("Confirm Payout"),
-          ),
-        ],
+        backgroundColor: const Color(0xFF2A2020),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: Colors.orangeAccent, width: 1),
+        ),
+        duration: const Duration(seconds: 4),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    // Calculate real numbers from bookings
-    final completedBookings = userBookingsList.where((b) => b.status == "Completed").toList();
-    final activeBookings = userBookingsList.where((b) => b.status == "Confirmed" || b.status == "Pending" || b.status == "In Progress").toList();
-
-    final int grossEarnings = completedBookings.fold(0, (sum, b) => sum + b.totalPrice);
-    final int platformCommission = (grossEarnings * 0.10).toInt();
-    final int netEarned = grossEarnings - platformCommission;
-    final int availableForWithdrawal = (netEarned - currentHostPayout.totalWithdrawn).clamp(0, 9999999);
-    final int pendingClearance = activeBookings.fold(0, (sum, b) => sum + b.totalPrice);
-
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       appBar: AppBar(
         backgroundColor: const Color(0xFF181818),
         foregroundColor: Colors.white,
-        title: const Text("Host Earnings & Bank Payout"),
+        title: const Text(
+          "Payment Details",
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // REVENUE CARDS
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF0077B6), Color(0xFF023E8A)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(18),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.blue.withOpacity(0.2),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    "Available for Bank Transfer",
-                    style: TextStyle(color: Colors.white70, fontSize: 13),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    "PKR $availableForWithdrawal",
-                    style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: const Color(0xFF023E8A),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                      onPressed: () => _requestWithdrawal(availableForWithdrawal),
-                      icon: const Icon(Icons.account_balance, size: 18),
-                      label: const Text("Request Payout to Bank", style: TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-
-            // 3 STATS ROW
-            Row(
-              children: [
-                Expanded(
-                  child: _buildMetricCard("Gross Bookings", "PKR $grossEarnings", Icons.trending_up, Colors.greenAccent),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _buildMetricCard("Total Withdrawn", "PKR ${currentHostPayout.totalWithdrawn}", Icons.done_all, Colors.blueAccent),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _buildMetricCard("Active Trips", "PKR $pendingClearance", Icons.hourglass_empty, Colors.amber),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-
-            // BANK ACCOUNT SETUP FORM
-            const Text(
-              "Payout Account Settings",
-              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
+            // P2P Explanatory Banner
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: const Color(0xFF1E1E1E),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white12),
+                border: Border.all(color: AppTheme.primary.withOpacity(0.4), width: 1.2),
               ),
-              child: Column(
+              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // METHOD SELECTOR
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: ["Bank Account", "JazzCash", "EasyPaisa"].map((m) {
-                      final isSel = _selectedMethod == m;
-                      return ChoiceChip(
-                        label: Text(m),
-                        selected: isSel,
-                        selectedColor: AppTheme.primary,
-                        backgroundColor: const Color(0xFF282828),
-                        labelStyle: TextStyle(
-                          color: isSel ? Colors.white : Colors.grey,
-                          fontSize: 11,
-                          fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary.withOpacity(0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.handshake_outlined, color: AppTheme.primary, size: 24),
+                  ),
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "Direct P2P Rental Payments",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                        onSelected: (_) => setState(() => _selectedMethod = m),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 14),
-
-                  if (_selectedMethod == "Bank Account") ...[
-                    DropdownButtonFormField<String>(
-                      value: _bankOptions.contains(_bankNameController.text) ? _bankNameController.text : _bankOptions.first,
-                      dropdownColor: const Color(0xFF222222),
-                      style: const TextStyle(color: Colors.white),
-                      decoration: InputDecoration(
-                        labelText: "Select Bank",
-                        labelStyle: const TextStyle(color: Colors.grey),
-                        prefixIcon: const Icon(Icons.account_balance, color: AppTheme.primary),
-                        filled: true,
-                        fillColor: const Color(0xFF252525),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                      ),
-                      items: _bankOptions.map((b) => DropdownMenuItem(value: b, child: Text(b))).toList(),
-                      onChanged: (val) {
-                        if (val != null) _bankNameController.text = val;
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-
-                  TextFormField(
-                    controller: _titleController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: "Account Title / Full Name",
-                      labelStyle: const TextStyle(color: Colors.grey),
-                      prefixIcon: const Icon(Icons.person_outline, color: AppTheme.primary),
-                      filled: true,
-                      fillColor: const Color(0xFF252525),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-
-                  TextFormField(
-                    controller: _ibanController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: _selectedMethod == "Bank Account" ? "IBAN (24 Characters, e.g. PK36...)" : "Mobile Account Number (0300...)",
-                      labelStyle: const TextStyle(color: Colors.grey),
-                      prefixIcon: const Icon(Icons.numbers, color: AppTheme.primary),
-                      filled: true,
-                      fillColor: const Color(0xFF252525),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppTheme.primary,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      ),
-                      onPressed: _isSavingAccount ? null : _savePayoutAccount,
-                      child: Text(_isSavingAccount ? "Saving..." : "Save Payout Details"),
+                        SizedBox(height: 4),
+                        Text(
+                          "When customers book your vehicle, they transfer payment directly to your account. Add your Bank, Easypaisa, or JazzCash details below.",
+                          style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.4),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
             ),
+
             const SizedBox(height: 24),
 
-            // TRANSACTION LEDGER
-            const Text(
-              "Recent Completed Trips Ledger",
-              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            if (completedBookings.isEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1E1E1E),
-                  borderRadius: BorderRadius.circular(14),
+            // 1. BANK ACCOUNT SECTION (At a time 1 Bank Account)
+            _buildSectionCard(
+              title: "Bank Account",
+              subtitle: "Direct 1Link / Raast bank transfers (1 account)",
+              icon: Icons.account_balance,
+              badgeText: currentHostPayout.hasBank ? "Active" : null,
+              children: [
+                DropdownButtonFormField<String>(
+                  value: _commonBanks.contains(_bankNameController.text) ? _bankNameController.text : _commonBanks.first,
+                  dropdownColor: const Color(0xFF222222),
+                  style: const TextStyle(color: Colors.white),
+                  decoration: _inputDecoration("Bank Name", icon: Icons.business),
+                  items: _commonBanks.map((b) => DropdownMenuItem(value: b, child: Text(b))).toList(),
+                  onChanged: (val) {
+                    if (val != null) setState(() => _bankNameController.text = val);
+                  },
                 ),
-                child: const Column(
-                  children: [
-                    Icon(Icons.receipt_long_outlined, color: Colors.grey, size: 36),
-                    SizedBox(height: 8),
-                    Text("No Completed Trips Yet", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    SizedBox(height: 4),
-                    Text("Earnings from completed trips will appear here automatically.", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _bankTitleController,
+                  textCapitalization: TextCapitalization.characters,
+                  inputFormatters: [
+                    UpperCaseTextFormatter(),
                   ],
+                  style: const TextStyle(color: Colors.white),
+                  decoration: _inputDecoration("Account Title (e.g. A. SAMI)", icon: Icons.person_outline),
                 ),
-              )
-            else
-              ...completedBookings.map((b) {
-                final net = (b.totalPrice * 0.90).toInt();
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E1E1E),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: Colors.white12),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _bankIbanController,
+                  textCapitalization: TextCapitalization.characters,
+                  style: const TextStyle(color: Colors.white, letterSpacing: 1),
+                  inputFormatters: [
+                    UpperCaseTextFormatter(),
+                    FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z0-9\-]')),
+                    LengthLimitingTextInputFormatter(34),
+                  ],
+                  decoration: _inputDecoration(
+                    "IBAN / Account Number",
+                    icon: Icons.credit_card,
+                    hint: "e.g. PK... (IBAN) or 012345678901",
                   ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              b.car.name,
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              "Renter: ${b.customerName} • ${b.days} Days",
-                              style: const TextStyle(color: Colors.grey, fontSize: 12),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            Text(
-                              "Payment: ${b.paymentMethod}",
-                              style: TextStyle(color: Colors.grey[500], fontSize: 11),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text("+PKR $net", style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 15)),
-                          const SizedBox(height: 2),
-                          const Text("Net (10% fee)", style: TextStyle(color: Colors.grey, fontSize: 10)),
-                        ],
-                      ),
-                    ],
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 20),
+
+            // 2. EASYPAISA SECTION
+            _buildSectionCard(
+              title: "Easypaisa Account",
+              subtitle: "Mobile wallet direct transfers",
+              icon: Icons.phone_android,
+              badgeText: currentHostPayout.hasEasypaisa ? "Active" : null,
+              children: [
+                TextField(
+                  controller: _easypaisaTitleController,
+                  textCapitalization: TextCapitalization.characters,
+                  inputFormatters: [
+                    UpperCaseTextFormatter(),
+                  ],
+                  style: const TextStyle(color: Colors.white),
+                  decoration: _inputDecoration("Easypaisa Account Title", icon: Icons.person_outline),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _easypaisaNumberController,
+                  keyboardType: TextInputType.phone,
+                  style: const TextStyle(color: Colors.white),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(11),
+                  ],
+                  decoration: _inputDecoration(
+                    "11-Digit Mobile Number (e.g. 03001234567)",
+                    icon: Icons.phone,
+                    hint: "03001234567",
                   ),
-                );
-              }),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 20),
+
+            // 3. JAZZCASH SECTION
+            _buildSectionCard(
+              title: "JazzCash Account",
+              subtitle: "Mobile wallet direct transfers",
+              icon: Icons.account_balance_wallet_outlined,
+              badgeText: currentHostPayout.hasJazzcash ? "Active" : null,
+              children: [
+                TextField(
+                  controller: _jazzcashTitleController,
+                  textCapitalization: TextCapitalization.characters,
+                  inputFormatters: [
+                    UpperCaseTextFormatter(),
+                  ],
+                  style: const TextStyle(color: Colors.white),
+                  decoration: _inputDecoration("JazzCash Account Title", icon: Icons.person_outline),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _jazzcashNumberController,
+                  keyboardType: TextInputType.phone,
+                  style: const TextStyle(color: Colors.white),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(11),
+                  ],
+                  decoration: _inputDecoration(
+                    "11-Digit Mobile Number (e.g. 03001234567)",
+                    icon: Icons.phone,
+                    hint: "03001234567",
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 30),
+
+            // SAVE BUTTON
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton.icon(
+                onPressed: _isSaving ? null : _saveAllPaymentDetails,
+                icon: _isSaving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.check_circle_outline, color: Colors.white, size: 20),
+                label: Text(
+                  _isSaving ? "Saving Payment Details..." : "Save Payment Details",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  elevation: 0,
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildMetricCard(String label, String value, IconData icon, Color color) {
+  Widget _buildSectionCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    String? badgeText,
+    required List<Widget> children,
+  }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: const Color(0xFF1E1E1E),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white12),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: color, size: 20),
-          const SizedBox(height: 8),
-          Text(
-            label,
-            style: const TextStyle(color: Colors.grey, fontSize: 10),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.primary.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: AppTheme.primaryLight, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(color: Colors.grey, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              if (badgeText != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green.withOpacity(0.4)),
+                  ),
+                  child: Text(
+                    badgeText,
+                    style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                  ),
+                ),
+            ],
           ),
-          const SizedBox(height: 2),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(
-              value,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
-            ),
-          ),
+          const SizedBox(height: 16),
+          const Divider(color: Colors.white10, height: 1),
+          const SizedBox(height: 16),
+          ...children,
         ],
       ),
     );
   }
+
+  InputDecoration _inputDecoration(String label, {required IconData icon, String? hint}) {
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      hintStyle: const TextStyle(color: Colors.white24, fontSize: 12),
+      labelStyle: const TextStyle(color: Colors.grey, fontSize: 13),
+      prefixIcon: Icon(icon, color: AppTheme.primary, size: 20),
+      filled: true,
+      fillColor: const Color(0xFF141414),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Colors.white12),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Colors.white12),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppTheme.primary),
+      ),
+    );
+  }
 }
+
+typedef OwnerPaymentDetailsScreen = HostEarningsScreen;

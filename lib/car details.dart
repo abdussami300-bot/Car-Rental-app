@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'theme.dart';
 import 'user_data.dart';
+import 'auth_service.dart';
 import 'checkout_screen.dart';
 import 'verification_screen.dart';
 import 'chat_screen.dart';
 import 'review_screen.dart';
 import 'login.dart';
+import 'firestore_service.dart';
 
 class CarDetails extends StatefulWidget {
   final String carName;
@@ -22,6 +25,8 @@ class CarDetails extends StatefulWidget {
   final String availableFrom;
   final String availableTo;
   final Map<String, String>? photos;
+  final List<String>? features;
+  final String category;
   final String currentUserEmail;
   final String currentUserName;
   final bool isGuest;
@@ -42,6 +47,8 @@ class CarDetails extends StatefulWidget {
     this.availableFrom = "Available Now",
     this.availableTo = "Always Open",
     this.photos,
+    this.features,
+    this.category = "Sedan",
     this.currentUserEmail = "",
     this.currentUserName = "",
     this.isGuest = false,
@@ -57,6 +64,20 @@ class _CarDetailsState extends State<CarDetails> {
   int _rentalDays = 2;
   DateTime _pickupDate = DateTime.now();
   DateTime _returnDate = DateTime.now().add(const Duration(days: 2));
+  String _hostName = "";
+  bool _isHostVerified = false;
+
+  String get _effectiveHostName {
+    if (_hostName.trim().isNotEmpty) return _hostName.trim();
+    final car = _currentCar;
+    if (car.ownerEmail.trim().isNotEmpty) {
+      final prefix = car.ownerEmail.split('@').first.replaceAll(RegExp(r'[._]'), ' ').trim();
+      if (prefix.isNotEmpty) {
+        return prefix.split(' ').map((w) => w.isNotEmpty ? '${w[0].toUpperCase()}${w.substring(1)}' : '').join(' ');
+      }
+    }
+    return "Car Host";
+  }
 
   CarItem get _currentCar {
     for (final c in allCarsList) {
@@ -81,20 +102,92 @@ class _CarDetailsState extends State<CarDetails> {
       availableFrom: widget.availableFrom,
       availableTo: widget.availableTo,
       photos: widget.photos,
+      features: widget.features,
+      category: widget.category,
     );
+  }
+
+  List<String> get _effectiveFeatures {
+    if (widget.features != null && widget.features!.isNotEmpty) {
+      return widget.features!;
+    }
+    if (_currentCar.features != null && _currentCar.features!.isNotEmpty) {
+      return _currentCar.features!;
+    }
+    final desc = widget.description;
+    if (desc.contains("Features:")) {
+      try {
+        final after = desc.split("Features:")[1];
+        final firstPart = after.split("•")[0].split("\n")[0];
+        return firstPart
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  String get _displayDescription {
+    String desc = widget.description.trim();
+    if (desc.contains("\n\nFeatures:")) {
+      desc = desc.split("\n\nFeatures:")[0].trim();
+    } else if (desc.contains("Features:")) {
+      desc = desc.split("Features:")[0].trim();
+    }
+    if (desc.contains("\n\nRental Mode:")) {
+      desc = desc.split("\n\nRental Mode:")[0].trim();
+    } else if (desc.contains("Rental Mode:")) {
+      desc = desc.split("Rental Mode:")[0].trim();
+    }
+    if (desc.contains("\n\nBody:")) {
+      desc = desc.split("\n\nBody:")[0].trim();
+    } else if (desc.contains("• Body:")) {
+      desc = desc.split("• Body:")[0].trim();
+    }
+    return desc.isNotEmpty ? desc : (widget.description.isNotEmpty ? widget.description.trim() : "Well maintained vehicle ready for your trip.");
+  }
+
+  IconData _getFeatureIcon(String feature) {
+    final lower = feature.toLowerCase();
+    if (lower.contains("ac") || lower.contains("condition") || lower.contains("air")) return Icons.ac_unit;
+    if (lower.contains("bluetooth") || lower.contains("audio") || lower.contains("speaker") || lower.contains("sound")) return Icons.bluetooth;
+    if (lower.contains("camera") || lower.contains("dash")) return Icons.camera_alt;
+    if (lower.contains("sunroof") || lower.contains("moonroof")) return Icons.wb_sunny_outlined;
+    if (lower.contains("abs") || lower.contains("airbag") || lower.contains("shield") || lower.contains("safety")) return Icons.shield;
+    if (lower.contains("gps") || lower.contains("navigation") || lower.contains("map")) return Icons.navigation;
+    if (lower.contains("cruise")) return Icons.speed;
+    if (lower.contains("leather") || lower.contains("seat")) return Icons.airline_seat_recline_extra;
+    if (lower.contains("usb") || lower.contains("charger") || lower.contains("charging")) return Icons.usb;
+    if (lower.contains("keyless") || lower.contains("push") || lower.contains("key")) return Icons.vpn_key;
+    if (lower.contains("wifi") || lower.contains("hotspot")) return Icons.wifi;
+    return Icons.check_circle_outline;
   }
 
   List<MapEntry<String, String>> get _photosList {
     final list = <MapEntry<String, String>>[];
     if (widget.photos != null && widget.photos!.isNotEmpty) {
       for (final e in widget.photos!.entries) {
-        if (e.value.isNotEmpty) {
+        if (e.key == "registration_doc") continue;
+        if (e.value.trim().isNotEmpty) {
           list.add(e);
         }
       }
     }
-    if (list.isEmpty && widget.carImage.isNotEmpty) {
-      list.add(MapEntry("Front View", widget.carImage));
+    if (_currentCar.photos != null && _currentCar.photos!.isNotEmpty) {
+      for (final e in _currentCar.photos!.entries) {
+        if (e.key == "registration_doc") continue;
+        if (e.value.trim().isNotEmpty && !list.any((x) => x.key == e.key)) {
+          list.add(e);
+        }
+      }
+    }
+    if (list.isEmpty && widget.carImage.trim().isNotEmpty) {
+      list.add(MapEntry("Front View", widget.carImage.trim()));
+    }
+    if (list.isEmpty && _currentCar.image.trim().isNotEmpty) {
+      list.add(MapEntry("Front View", _currentCar.image.trim()));
     }
     return list;
   }
@@ -103,6 +196,12 @@ class _CarDetailsState extends State<CarDetails> {
   void initState() {
     super.initState();
     _pageController = PageController();
+    _fetchHostProfile();
+    FirestoreService.syncCarSchedulesFromFirestore().then((_) {
+      if (mounted) setState(() {});
+    });
+    FirestoreService.addBookingsListener(_onScheduleChanged);
+
     final today = DateTime.now();
     DateTime checkDate = DateTime(today.year, today.month, today.day);
     if (isDateBookedForCar(_currentCar, checkDate)) {
@@ -114,8 +213,37 @@ class _CarDetailsState extends State<CarDetails> {
     _returnDate = _pickupDate.add(Duration(days: _rentalDays));
   }
 
+  void _onScheduleChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _fetchHostProfile() async {
+    final car = _currentCar;
+    Map<String, dynamic>? doc;
+    if (car.ownerId.isNotEmpty) {
+      doc = await AuthService().getUserProfileById(car.ownerId);
+    }
+    if (doc == null && car.ownerEmail.isNotEmpty) {
+      doc = await AuthService().getUserProfileByEmail(car.ownerEmail);
+    }
+    if (doc != null && mounted) {
+      final fetchedName = (doc['name'] ?? doc['displayName'] ?? '').toString().trim();
+      final status = (doc['verificationStatus'] ?? doc['status'] ?? '').toString().toLowerCase().trim();
+      final isVerified = doc['isHostVerified'] == true ||
+          doc['isVerified'] == true ||
+          status == 'verified' ||
+          status == 'approved';
+
+      setState(() {
+        if (fetchedName.isNotEmpty) _hostName = fetchedName;
+        _isHostVerified = isVerified;
+      });
+    }
+  }
+
   @override
   void dispose() {
+    FirestoreService.removeBookingsListener(_onScheduleChanged);
     _pageController.dispose();
     super.dispose();
   }
@@ -178,6 +306,16 @@ class _CarDetailsState extends State<CarDetails> {
   void _showRentModal() {
     if (widget.isGuest) {
       _showGuestLoginPrompt("rent this car");
+      return;
+    }
+    final userEmail = (widget.currentUserEmail.isNotEmpty ? widget.currentUserEmail : email).trim().toLowerCase();
+    if (_currentCar.isOwnedByActiveUser || _currentCar.isOwnedBy(userEmail)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("You are the host of this vehicle and cannot rent it."),
+          backgroundColor: Colors.amber,
+        ),
+      );
       return;
     }
     showModalBottomSheet(
@@ -751,22 +889,40 @@ class _CarDetailsState extends State<CarDetails> {
 
                         // Check Identity & Driving License Verification
                         if (!currentUserVerification.isVerified) {
+                          final outerContext = this.context;
                           Navigator.pop(modalContext);
                           showDialog(
-                            context: context,
+                            context: outerContext,
                             builder: (ctx) => AlertDialog(
                               backgroundColor: const Color(0xFF1E1E1E),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                              title: const Row(
+                              title: Row(
                                 children: [
-                                  Icon(Icons.verified_user_outlined, color: AppTheme.primary, size: 24),
-                                  SizedBox(width: 8),
-                                  Text("Verification Required", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                                  Icon(
+                                    currentUserVerification.isPending
+                                        ? Icons.hourglass_top
+                                        : (currentUserVerification.isRejected ? Icons.error_outline : Icons.verified_user_outlined),
+                                    color: currentUserVerification.isPending
+                                        ? Colors.amber
+                                        : (currentUserVerification.isRejected ? Colors.redAccent : AppTheme.primary),
+                                    size: 24,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    currentUserVerification.isPending
+                                        ? "Verification Pending"
+                                        : (currentUserVerification.isRejected ? "Verification Rejected" : "Verification Required"),
+                                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                                  ),
                                 ],
                               ),
-                              content: const Text(
-                                "For security and insurance compliance in Pakistan, CNIC and Driving License verification is required before booking.",
-                                style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+                              content: Text(
+                                currentUserVerification.isPending
+                                    ? "Your CNIC and Driving License are currently under review by our admin team. You will be able to complete bookings as soon as your account is approved."
+                                    : (currentUserVerification.isRejected
+                                        ? "Your previous verification request was rejected${currentUserVerification.rejectionReason.isNotEmpty ? ': ${currentUserVerification.rejectionReason}' : ''}. Please re-upload clearer document photos to proceed with booking."
+                                        : "For security and insurance compliance in Pakistan, CNIC and Driving License verification is required before booking."),
+                                style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
                               ),
                               actions: [
                                 TextButton(
@@ -782,11 +938,15 @@ class _CarDetailsState extends State<CarDetails> {
                                   onPressed: () {
                                     Navigator.pop(ctx);
                                     Navigator.push(
-                                      context,
-                                      MaterialPageRoute(builder: (context) => const VerificationScreen()),
+                                      outerContext,
+                                      MaterialPageRoute(builder: (_) => const VerificationScreen(isOwner: false)),
                                     );
                                   },
-                                  child: const Text("Verify Now"),
+                                  child: Text(
+                                    currentUserVerification.isPending
+                                        ? "View Status"
+                                        : (currentUserVerification.isRejected ? "Update Documents" : "Verify Now"),
+                                  ),
                                 ),
                               ],
                             ),
@@ -848,6 +1008,11 @@ class _CarDetailsState extends State<CarDetails> {
     );
   }
 
+  bool get _isOwnerOfThisCar {
+    final userEmail = (widget.currentUserEmail.isNotEmpty ? widget.currentUserEmail : email).trim().toLowerCase();
+    return _currentCar.isOwnedByActiveUser || _currentCar.isOwnedBy(userEmail);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -859,28 +1024,29 @@ class _CarDetailsState extends State<CarDetails> {
         foregroundColor: Colors.white,
         title: const Text("Car Details"),
         actions: [
-          IconButton(
-            onPressed: () async {
-              await toggleFavoriteCar(_currentCar.id);
-              setState(() {});
-              final isFav = isCarFavorite(_currentCar.id);
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(isFav
-                        ? "${widget.carName} added to favorites!"
-                        : "${widget.carName} removed from favorites!"),
-                    duration: const Duration(seconds: 1),
-                    backgroundColor: AppTheme.primary,
-                  ),
-                );
-              }
-            },
-            icon: Icon(
-              isCarFavorite(_currentCar.id) ? Icons.favorite : Icons.favorite_border,
-              color: isCarFavorite(_currentCar.id) ? Colors.redAccent : AppTheme.primaryLight,
+          if (!_isOwnerOfThisCar)
+            IconButton(
+              onPressed: () async {
+                await toggleFavoriteCar(_currentCar.id);
+                setState(() {});
+                final isFav = isCarFavorite(_currentCar.id);
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(isFav
+                          ? "${widget.carName} added to favorites!"
+                          : "${widget.carName} removed from favorites!"),
+                      duration: const Duration(seconds: 1),
+                      backgroundColor: AppTheme.primary,
+                    ),
+                  );
+                }
+              },
+              icon: Icon(
+                isCarFavorite(_currentCar.id) ? Icons.favorite : Icons.favorite_border,
+                color: isCarFavorite(_currentCar.id) ? Colors.redAccent : AppTheme.primaryLight,
+              ),
             ),
-          ),
         ],
       ),
 
@@ -1031,82 +1197,6 @@ class _CarDetailsState extends State<CarDetails> {
                 ),
               ),
 
-              // Synchronized Thumbnail Strip
-              if (_photosList.length > 1) ...[
-                const SizedBox(height: 12),
-                SizedBox(
-                  height: 64,
-                  child: ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: _photosList.length,
-                    itemBuilder: (context, index) {
-                      final isSelected = _currentPhotoIndex == index;
-                      final label = _photosList[index].key.replaceAll("_", " ").toUpperCase();
-                      final path = _photosList[index].value;
-
-                      return GestureDetector(
-                        onTap: () {
-                          _pageController.animateToPage(
-                            index,
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeInOut,
-                          );
-                        },
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          margin: const EdgeInsets.only(right: 10),
-                          width: 72,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: isSelected ? AppTheme.primary : Colors.white24,
-                              width: isSelected ? 2.2 : 1.0,
-                            ),
-                            boxShadow: isSelected
-                                ? [
-                                    BoxShadow(
-                                      color: AppTheme.primary.withOpacity(0.35),
-                                      blurRadius: 6,
-                                      spreadRadius: 1,
-                                    ),
-                                  ]
-                                : null,
-                          ),
-                          clipBehavior: Clip.antiAlias,
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              buildCarImage(path),
-                              Positioned(
-                                bottom: 0,
-                                left: 0,
-                                right: 0,
-                                child: Container(
-                                  color: isSelected
-                                      ? AppTheme.primary.withOpacity(0.9)
-                                      : Colors.black.withOpacity(0.7),
-                                  padding: const EdgeInsets.symmetric(vertical: 2),
-                                  child: Text(
-                                    label,
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      color: isSelected ? Colors.black : Colors.white,
-                                      fontSize: 8,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
 
               const SizedBox(height: 20),
 
@@ -1147,11 +1237,27 @@ class _CarDetailsState extends State<CarDetails> {
                     style: const TextStyle(color: Colors.white, fontSize: 16),
                   ),
                   const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      "(Verified Host • 140+ Trips)",
-                      style: TextStyle(color: Colors.grey, fontSize: 13),
-                      overflow: TextOverflow.ellipsis,
+                  Expanded(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _isHostVerified ? Icons.verified : Icons.gpp_bad_outlined,
+                          color: _isHostVerified ? Colors.greenAccent : Colors.orangeAccent,
+                          size: 14,
+                        ),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            "(${_isHostVerified ? "Verified Host" : "Unverified Host"} • 140+ Trips)",
+                            style: TextStyle(
+                              color: _isHostVerified ? Colors.greenAccent.shade100 : Colors.orangeAccent.shade100,
+                              fontSize: 13,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -1365,36 +1471,51 @@ class _CarDetailsState extends State<CarDetails> {
                       ),
                     ),
                   ),
+                ],
+              ),
 
-                  const SizedBox(width: 8),
-
-                  // Speed Field
-                  Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+              // ---------- 4. FEATURES SECTION ----------
+              if (_effectiveFeatures.isNotEmpty) ...[
+                const SizedBox(height: 24),
+                const Text(
+                  "Features",
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: _effectiveFeatures.map((feat) {
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       decoration: BoxDecoration(
                         color: const Color(0xFF1E1E1E),
                         borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppTheme.primary.withOpacity(0.35)),
                       ),
-                      child: Column(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.speed, color: AppTheme.primary, size: 22),
-                          const SizedBox(height: 6),
-                          const Text("Speed", style: TextStyle(color: Colors.grey, fontSize: 11)),
-                          const SizedBox(height: 4),
-                          FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              widget.speed,
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                          Icon(_getFeatureIcon(feat), color: AppTheme.primary, size: 16),
+                          const SizedBox(width: 6),
+                          Text(
+                            feat,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
                         ],
                       ),
-                    ),
-                  ),
-                ],
-              ),
+                    );
+                  }).toList(),
+                ),
+              ],
 
               const SizedBox(height: 24),
 
@@ -1411,7 +1532,7 @@ class _CarDetailsState extends State<CarDetails> {
               const SizedBox(height: 8),
 
               Text(
-                widget.description,
+                _displayDescription,
                 style: const TextStyle(
                   color: Colors.grey,
                   fontSize: 14,
@@ -1471,49 +1592,96 @@ class _CarDetailsState extends State<CarDetails> {
                       child: const Icon(Icons.person, color: AppTheme.primaryLight, size: 24),
                     ),
                     const SizedBox(width: 12),
-                    const Expanded(
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            "Host: Ali Raza (Verified)",
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                            _effectiveHostName,
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          SizedBox(height: 2),
-                          Text(
-                            "★ 4.9 Rating • 100% Response Rate",
-                            style: TextStyle(color: Colors.grey, fontSize: 11),
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Icon(
+                                _isHostVerified ? Icons.verified : Icons.gpp_bad_outlined,
+                                color: _isHostVerified ? Colors.greenAccent : Colors.orangeAccent,
+                                size: 13,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                _isHostVerified ? "Verified Host" : "Unverified Host",
+                                style: TextStyle(
+                                  color: _isHostVerified ? Colors.greenAccent : Colors.orangeAccent,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const Text(
+                                " • ★ 4.9",
+                                style: TextStyle(color: Colors.grey, fontSize: 11),
+                              ),
+                            ],
                           ),
                         ],
                       ),
                     ),
-                    OutlinedButton.icon(
-                      onPressed: () {
-                        if (widget.isGuest) {
-                          _showGuestLoginPrompt("chat with the host");
-                          return;
-                        }
-                        final userEmail = widget.currentUserEmail.isNotEmpty ? widget.currentUserEmail : email;
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => ChatScreen(
-                              bookingId: "pre_booking_${widget.carName.hashCode.abs()}",
-                              carName: widget.carName,
-                              otherPartyName: "Ali Raza (Host)",
-                              isHostViewing: false,
-                              currentUserEmail: userEmail,
+                    Builder(
+                      builder: (context) {
+                        final userEmail = (widget.currentUserEmail.isNotEmpty ? widget.currentUserEmail : email).trim().toLowerCase();
+                        final isOwnerOfThisCar = _currentCar.isOwnedByActiveUser || _currentCar.isOwnedBy(userEmail);
+                        if (isOwnerOfThisCar) {
+                          return Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primary.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: AppTheme.primaryLight.withOpacity(0.4)),
                             ),
+                            child: const Text("Your Car", style: TextStyle(color: AppTheme.primaryLight, fontSize: 12, fontWeight: FontWeight.bold)),
+                          );
+                        }
+                        return OutlinedButton.icon(
+                          onPressed: () {
+                            if (widget.isGuest) {
+                              _showGuestLoginPrompt("chat with the host");
+                              return;
+                            }
+                            final effectiveCustId = (activeUserId.isNotEmpty
+                                ? activeUserId
+                                : (FirebaseAuth.instance.currentUser?.uid.isNotEmpty == true
+                                    ? FirebaseAuth.instance.currentUser!.uid
+                                    : userEmail.replaceAll('.', '_'))).trim();
+
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => ChatScreen(
+                                  bookingId: "pre_${_currentCar.id}_$effectiveCustId",
+                                  carName: widget.carName,
+                                  otherPartyName: _hostName.isNotEmpty ? _hostName : "Host",
+                                  isHostViewing: false,
+                                  currentUserEmail: userEmail,
+                                  currentUserName: (widget.currentUserName.isNotEmpty ? widget.currentUserName : (activeUserName.isNotEmpty ? activeUserName : name)).trim(),
+                                  carId: _currentCar.id,
+                                  ownerEmail: _currentCar.ownerEmail,
+                                  customerEmail: userEmail,
+                                  ownerId: _currentCar.ownerId,
+                                  customerId: effectiveCustId,
+                                ),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.chat_bubble_outline, size: 14, color: AppTheme.primaryLight),
+                          label: const Text("Chat", style: TextStyle(color: AppTheme.primaryLight, fontSize: 12)),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: AppTheme.primary),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                           ),
                         );
                       },
-                      icon: const Icon(Icons.chat_bubble_outline, size: 14, color: AppTheme.primaryLight),
-                      label: const Text("Chat", style: TextStyle(color: AppTheme.primaryLight, fontSize: 12)),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: AppTheme.primary),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      ),
                     ),
                   ],
                 ),
@@ -1527,6 +1695,7 @@ class _CarDetailsState extends State<CarDetails> {
                   final reviews = getReviewsForCar(widget.carName, carId: _currentCar.id);
                   final userEmail = widget.currentUserEmail.isNotEmpty ? widget.currentUserEmail : email;
                   final userName = widget.currentUserName.isNotEmpty ? widget.currentUserName : name;
+                  final isOwnerOfThisCar = _currentCar.isOwnedByActiveUser || _currentCar.isOwnedBy(userEmail);
 
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1570,34 +1739,36 @@ class _CarDetailsState extends State<CarDetails> {
                               ],
                             ),
                           ),
-                          const SizedBox(width: 6),
-                          TextButton.icon(
-                            style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                              minimumSize: Size.zero,
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            ),
-                            onPressed: () async {
-                              if (widget.isGuest) {
-                                _showGuestLoginPrompt("write a review");
-                                return;
-                              }
-                              await Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => ReviewScreen(
-                                    carId: _currentCar.id,
-                                    carName: widget.carName,
-                                    userEmail: userEmail,
-                                    userName: userName,
+                          if (!isOwnerOfThisCar) ...[
+                            const SizedBox(width: 6),
+                            TextButton.icon(
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              onPressed: () async {
+                                if (widget.isGuest) {
+                                  _showGuestLoginPrompt("write a review");
+                                  return;
+                                }
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => ReviewScreen(
+                                      carId: _currentCar.id,
+                                      carName: widget.carName,
+                                      userEmail: userEmail,
+                                      userName: userName,
+                                    ),
                                   ),
-                                ),
-                              );
-                              setState(() {});
-                            },
-                            icon: const Icon(Icons.rate_review_outlined, size: 14, color: AppTheme.primaryLight),
-                            label: const Text("Write Review", style: TextStyle(color: AppTheme.primaryLight, fontSize: 12)),
-                          ),
+                                );
+                                setState(() {});
+                              },
+                              icon: const Icon(Icons.rate_review_outlined, size: 14, color: AppTheme.primaryLight),
+                              label: const Text("Write Review", style: TextStyle(color: AppTheme.primaryLight, fontSize: 12)),
+                            ),
+                          ],
                         ],
                       ),
                       const SizedBox(height: 10),
@@ -1715,9 +1886,16 @@ class _CarDetailsState extends State<CarDetails> {
               // ---------- 7. RENT NOW / ACTIVE BOOKING STATUS BUTTON ----------
               Builder(
                 builder: (context) {
-                  final userEmail = widget.currentUserEmail.isNotEmpty
+                  final userEmail = (widget.currentUserEmail.isNotEmpty
                       ? widget.currentUserEmail
-                      : email;
+                      : email).trim().toLowerCase();
+                  final isOwnedByMe = _currentCar.isOwnedByActiveUser || _currentCar.isOwnedBy(userEmail);
+
+                  // If the current user owns this car, do not display any rent button or "Managed by You" banner
+                  if (isOwnedByMe) {
+                    return const SizedBox.shrink();
+                  }
+
                   final isRequestedByMe = hasUserRequestedCarName(widget.carName, userEmail);
                   final myActiveBooking = getUserActiveBookingForCar(widget.carName, userEmail);
 

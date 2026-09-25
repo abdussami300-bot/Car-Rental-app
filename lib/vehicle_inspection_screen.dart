@@ -3,19 +3,23 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'theme.dart';
 import 'user_data.dart';
+import 'firestore_service.dart';
+import 'storage_service.dart';
 
 class VehicleInspectionScreen extends StatefulWidget {
   final BookingItem booking;
   final String inspectionType; // "Pre-Trip Handover" or "Post-Trip Return"
   final bool isReadOnly;
   final String inspectorName;
+  final bool isOwnerReviewMode;
 
   const VehicleInspectionScreen({
     super.key,
     required this.booking,
     this.inspectionType = "Pre-Trip Handover",
     this.isReadOnly = false,
-    this.inspectorName = "Ali Raza (Host)",
+    this.inspectorName = "Host",
+    this.isOwnerReviewMode = false,
   });
 
   @override
@@ -69,6 +73,13 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
       final estKm = (widget.booking.days <= 0 ? 1 : widget.booking.days) * 80;
       _odometerController.text = (existingPre.odometerKm + estKm).toString();
       _fuelLevel = existingPre.fuelLevelPercent.toDouble();
+      if (!widget.booking.registrationCardHandedOver) {
+        _hasRegistrationCard = false;
+      }
+    } else if (_isPostTrip) {
+      if (!widget.booking.registrationCardHandedOver) {
+        _hasRegistrationCard = false;
+      }
     } else if (existingPre != null) {
       _odometerController.text = existingPre.odometerKm.toString();
       _fuelLevel = existingPre.fuelLevelPercent.toDouble();
@@ -116,9 +127,11 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
         });
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error picking image: $e")),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error picking image: $e")),
+        );
+      }
     }
   }
 
@@ -311,6 +324,19 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
 
     setState(() => _isSaving = true);
 
+    Map<String, String> uploadedConditionPhotos = Map.from(_conditionPhotos);
+    try {
+      final cloudPhotos = await StorageService.uploadInspectionPhotos(
+        bookingId: widget.booking.id,
+        photos: _conditionPhotos,
+      );
+      if (cloudPhotos.isNotEmpty) {
+        uploadedConditionPhotos = cloudPhotos;
+      }
+    } catch (e) {
+      debugPrint("⚠️ Failed to upload inspection condition photos: $e");
+    }
+
     final inspectionSheet = VehicleInspectionSheet(
       id: "INSP-${DateTime.now().millisecondsSinceEpoch.toString().substring(6)}",
       bookingId: widget.booking.id,
@@ -325,7 +351,7 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
       hasToolkit: _hasToolkit,
       hasRegistrationCard: _hasRegistrationCard,
       damages: List.from(_damages),
-      conditionPhotos: Map.from(_conditionPhotos),
+      conditionPhotos: uploadedConditionPhotos,
       renterSignature: "Digitally Signed (${widget.booking.customerName.isNotEmpty ? widget.booking.customerName : 'Customer'})",
       hostSignature: "Verified by ${widget.inspectorName}",
       notes: _notesController.text.trim(),
@@ -339,11 +365,16 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
 
     if (_isPostTrip) {
       widget.booking.postTripInspection = inspectionSheet;
-      widget.booking.status = "Completed";
+      widget.booking.returnInspectionStatus = "submitted";
+      widget.booking.status = "Return Pending";
     } else {
       widget.booking.preTripInspection = inspectionSheet;
-      widget.booking.status = "In Progress";
+      widget.booking.inspectionStatus = "customer_submitted";
+      // Stays in Confirmed status until host reviews and confirms it!
     }
+
+    await saveBookingsToLocalStorage();
+    FirestoreService.updateBookingDetailsInFirestore(widget.booking.id, widget.booking.toJson());
 
     setState(() => _isSaving = false);
 
@@ -358,8 +389,8 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
               Expanded(
                 child: Text(
                   _isPostTrip
-                      ? "Return inspection saved! Trip completed successfully."
-                      : "Handover inspection verified! Keys handed over, trip started.",
+                      ? "Return inspection submitted! Awaiting host review & approval to complete trip."
+                      : "Pre-trip inspection submitted! Awaiting host review & confirmation before handover.",
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
@@ -432,23 +463,28 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      children: [
-                        Icon(
-                          post != null ? Icons.fact_check : Icons.security,
-                          color: post != null ? Colors.tealAccent : Colors.cyanAccent,
-                          size: 26,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          post != null ? "Official Return Certificate" : "Official Handover Certificate",
-                          style: TextStyle(
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Icon(
+                            post != null ? Icons.fact_check : Icons.security,
                             color: post != null ? Colors.tealAccent : Colors.cyanAccent,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
+                            size: 26,
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              post != null ? "Official Return Certificate" : "Official Handover Certificate",
+                              style: TextStyle(
+                                color: post != null ? Colors.tealAccent : Colors.cyanAccent,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -470,7 +506,7 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  "Renter: ${widget.booking.customerName.isNotEmpty ? widget.booking.customerName : 'Customer'} • Host: Ali Raza",
+                  "Renter: ${widget.booking.customerName.isNotEmpty ? widget.booking.customerName : 'Customer'} • Host: ${widget.inspectorName.isNotEmpty ? widget.inspectorName : 'Host'}",
                   style: const TextStyle(color: Colors.white70, fontSize: 13),
                 ),
               ],
@@ -740,7 +776,7 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
           // Damages list
           if (sheet.damages.isNotEmpty) ...[
             const SizedBox(height: 14),
-            const Text("Recorded Scratches / Marks:", style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+            const Text("Recorded Scratches:", style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
             ...sheet.damages.map(
               (d) => Container(
@@ -801,6 +837,127 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
               ),
             ],
           ),
+          // 1. Host Pre-Trip Inspection Review & Approval
+          if (widget.isOwnerReviewMode && !_isPostTrip && widget.booking.inspectionStatus != "owner_confirmed") ...[
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.green.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.5)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.verified, color: Colors.greenAccent, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        "Host Pre-Trip Inspection Review",
+                        style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 14),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    "Review renter pre-trip inspection photos, fuel gauge, and odometer. Confirming this inspection certifies vehicle handover condition and unlocks key handover.",
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 46,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green.shade700,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      onPressed: () async {
+                        widget.booking.inspectionStatus = "owner_confirmed";
+                        await saveBookingsToLocalStorage();
+                        FirestoreService.updateBookingDetailsInFirestore(widget.booking.id, {"inspectionStatus": "owner_confirmed"});
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text("✅ Pre-trip inspection approved! Key Handover button is now unlocked."),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                          Navigator.pop(context, true);
+                        }
+                      },
+                      icon: const Icon(Icons.check_circle_outline, size: 18),
+                      label: const Text("Confirm & Approve Pre-Trip Inspection", style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          // 2. Host Post-Trip Return Review & Approval
+          if (widget.isOwnerReviewMode && _isPostTrip && widget.booking.returnInspectionStatus != "confirmed") ...[
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.green.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.5)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.verified, color: Colors.greenAccent, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        "Host Return Review",
+                        style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 14),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    "Review customer return photos, fuel gauge, and odometer. Confirming this inspection certifies vehicle return condition and unlocks trip completion.",
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 46,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green.shade700,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      onPressed: () async {
+                        widget.booking.returnInspectionStatus = "confirmed";
+                        await saveBookingsToLocalStorage();
+                        FirestoreService.updateBookingDetailsInFirestore(widget.booking.id, {"returnInspectionStatus": "confirmed"});
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text("Return inspection confirmed! You can now mark the trip as completed."),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                          Navigator.pop(context, true);
+                        }
+                      },
+                      icon: const Icon(Icons.check_circle_outline, size: 18),
+                      label: const Text("Confirm & Approve Return Inspection", style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -811,12 +968,14 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
       children: [
         Icon(icon, color: AppTheme.primaryLight, size: 20),
         const SizedBox(width: 8),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label, style: const TextStyle(color: Colors.grey, fontSize: 11)),
-            Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-          ],
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(color: Colors.grey, fontSize: 11)),
+              Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis),
+            ],
+          ),
         ),
       ],
     );
@@ -971,12 +1130,14 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.local_gas_station, color: AppTheme.primaryLight, size: 20),
-                        SizedBox(width: 8),
-                        Text("Fuel Tank Level", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
-                      ],
+                    const Expanded(
+                      child: Row(
+                        children: [
+                          Icon(Icons.local_gas_station, color: AppTheme.primaryLight, size: 20),
+                          SizedBox(width: 8),
+                          Text("Fuel Tank Level", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                        ],
+                      ),
                     ),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -1026,11 +1187,11 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text("Empty (0%)", style: TextStyle(color: Colors.grey, fontSize: 11)),
-                      Text("1/4 (25%)", style: TextStyle(color: Colors.grey, fontSize: 11)),
-                      Text("1/2 (50%)", style: TextStyle(color: Colors.grey, fontSize: 11)),
-                      Text("3/4 (75%)", style: TextStyle(color: Colors.grey, fontSize: 11)),
-                      Text("Full (100%)", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                      Text("0%", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                      Text("25%", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                      Text("50%", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                      Text("75%", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                      Text("100%", style: TextStyle(color: Colors.grey, fontSize: 11)),
                     ],
                   ),
                 ),
@@ -1060,7 +1221,10 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
                 const SizedBox(height: 12),
                 _buildCheckboxTile("Spare Wheel & Tyre", "Mounted in trunk and inflated", _hasSpareTire, (v) => setState(() => _hasSpareTire = v)),
                 _buildCheckboxTile("Tool Kit & Car Jack", "Required for roadside emergencies", _hasToolkit, (v) => setState(() => _hasToolkit = v)),
-                _buildCheckboxTile("Original Registration Card", "Car registration book / tax token in glovebox", _hasRegistrationCard, (v) => setState(() => _hasRegistrationCard = v)),
+                if (_isPostTrip && !widget.booking.registrationCardHandedOver)
+                  _buildCheckboxTile("Original Registration Card", "Not handed over by host at pickup (Locked)", false, null)
+                else
+                  _buildCheckboxTile("Original Registration Card", "Car registration book / tax token in glovebox", _hasRegistrationCard, (v) => setState(() => _hasRegistrationCard = v)),
                 _buildCheckboxTile("Exterior Cleanliness", "Car washed & exterior clear of mud", _exteriorClean, (v) => setState(() => _exteriorClean = v)),
                 _buildCheckboxTile("Interior Cleanliness", "Seats, mats & cabin vacuumed", _interiorClean, (v) => setState(() => _interiorClean = v)),
               ],
@@ -1082,13 +1246,18 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.brush_outlined, color: AppTheme.primaryLight, size: 20),
-                        SizedBox(width: 8),
-                        Text("Existing Scratches & Marks", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
-                      ],
+                    const Expanded(
+                      child: Row(
+                        children: [
+                          Icon(Icons.brush_outlined, color: AppTheme.primaryLight, size: 20),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text("Existing Scratches", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis),
+                          ),
+                        ],
+                      ),
                     ),
+                    const SizedBox(width: 6),
                     ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF2C2C2C),
@@ -1227,12 +1396,14 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.draw, color: AppTheme.primaryLight, size: 20),
-                        SizedBox(width: 8),
-                        Text("Handover Digital Signature", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
-                      ],
+                    const Expanded(
+                      child: Row(
+                        children: [
+                          Icon(Icons.draw, color: AppTheme.primaryLight, size: 20),
+                          SizedBox(width: 8),
+                          Text("Digital Signature", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15), overflow: TextOverflow.ellipsis),
+                        ],
+                      ),
                     ),
                     TextButton(
                       onPressed: () {
@@ -1315,11 +1486,11 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
               onPressed: _isSaving ? null : _submitInspection,
               icon: _isSaving
                   ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : Icon(_isPostTrip ? Icons.task_alt : Icons.key, color: Colors.white),
+                  : Icon(_isPostTrip ? Icons.task_alt : Icons.check_circle_outline, color: Colors.white),
               label: Text(
                 _isSaving
                     ? "Saving Inspection..."
-                    : (_isPostTrip ? "Finalize Return & Complete Trip" : "Confirm Inspection & Hand Over Keys"),
+                    : (_isPostTrip ? "Submit Return Inspection for Host Review" : "Confirm Pre-Trip Inspection Sheet"),
                 style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
               ),
             ),
@@ -1330,7 +1501,7 @@ class _VehicleInspectionScreenState extends State<VehicleInspectionScreen> {
     );
   }
 
-  Widget _buildCheckboxTile(String title, String subtitle, bool value, ValueChanged<bool> onChanged) {
+  Widget _buildCheckboxTile(String title, String subtitle, bool value, ValueChanged<bool>? onChanged) {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

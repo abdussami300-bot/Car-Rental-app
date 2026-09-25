@@ -8,8 +8,8 @@ class FavoritesScreen extends StatefulWidget {
   final String userName;
   const FavoritesScreen({
     super.key,
-    this.userEmail = "sami@example.com",
-    this.userName = "Sami",
+    this.userEmail = "",
+    this.userName = "",
   });
 
   @override
@@ -128,6 +128,8 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                             availableFrom: car.availableFrom,
                             availableTo: car.availableTo,
                             photos: car.photos,
+                            features: car.features,
+                            category: car.category,
                             currentUserEmail: widget.userEmail,
                             currentUserName: widget.userName,
                           ),
