@@ -9,6 +9,25 @@
       "client_info": {
         "mobilesdk_app_id": "1:911247380877:android:d72720b6a928169752adc4",
         "android_client_info": {
+          "package_name": "com.abdussami.carrental"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCmiw-74BoxULHPVjnsNxKMJgAi89_LpiA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:911247380877:android:d72720b6a928169752adc4",
+        "android_client_info": {
           "package_name": "com.example.untitled2"
         }
       },
