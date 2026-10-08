@@ -117,7 +117,15 @@ class _SignupState extends State<Signup> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 25),
+              const SizedBox(height: 16),
+              Center(
+                child: Image.asset(
+                  'images/sayyarah-logo.png',
+                  width: 220,
+                  fit: BoxFit.contain,
+                ),
+              ),
+              const SizedBox(height: 16),
               const Center(
                 child: Text(
                   "Create Your Account",

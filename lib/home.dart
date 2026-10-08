@@ -19,6 +19,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'auth_service.dart';
 import 'firestore_service.dart';
 import 'host_onboarding_screen.dart';
+import 'support_screen.dart';
+import 'security_privacy_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -421,7 +423,6 @@ class _HomePageState extends State<HomePage> {
         saveVerificationToLocalStorage();
 
         final userRole = (data['role'] ?? '').toString().toLowerCase().trim();
-        final isHostVer = data['isHostVerified'] == true;
 
         // Only switch to Owner Mode if user has at least one APPROVED car!
         // CNIC / document approval alone does NOT make a user an owner.
@@ -1494,6 +1495,83 @@ class _HomePageState extends State<HomePage> {
                 ],
               ),
             ),
+
+            // ================= THEME SWITCHER CARD (Drawer) =================
+            ValueListenableBuilder<ThemeMode>(
+              valueListenable: themeModeNotifier,
+              builder: (context, currentMode, _) {
+                final isDark = currentMode == ThemeMode.dark;
+                return Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF252525),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.cyan.shade900 : Colors.amber.shade900,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          isDark ? Icons.dark_mode_outlined : Icons.light_mode_outlined,
+                          color: isDark ? Colors.cyanAccent : Colors.amberAccent,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              isDark ? "Dark Theme" : "Light Theme",
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              isDark ? "OLED black with cyan accents" : "Clean light off-white background",
+                              style: const TextStyle(color: Colors.grey, fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Switch(
+                        value: isDark,
+                        activeColor: AppTheme.primary,
+                        inactiveThumbColor: Colors.amberAccent,
+                        inactiveTrackColor: Colors.amber.shade900.withOpacity(0.4),
+                        onChanged: (val) async {
+                          final newMode = val ? ThemeMode.dark : ThemeMode.light;
+                          await saveThemeToLocalStorage(newMode);
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  val ? "🌙 Switched to Dark Theme!" : "☀️ Switched to Light Theme!",
+                                ),
+                                backgroundColor: AppTheme.primary,
+                                duration: const Duration(seconds: 2),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+
             const Divider(color: Colors.white12),
 
             // ================= CONDITIONAL DRAWER TILES =================
@@ -1694,6 +1772,45 @@ class _HomePageState extends State<HomePage> {
                 );
               },
             ),
+            const SizedBox(height: 20),
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF14171C),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF222933)),
+              ),
+              child: Column(
+                children: [
+                  Image.asset(
+                    'images/sayyarah-icon.png',
+                    height: 36,
+                    width: 36,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    "SAYYARAH",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    "Safar Apna, Ride Apni.",
+                    style: TextStyle(
+                      color: AppTheme.primary,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
           ],
         ),
       ),
@@ -1712,8 +1829,8 @@ class _HomePageState extends State<HomePage> {
           ),
         ),
         title: Text(
-          _isOwnerMode ? "Owner Hub" : "Car Rental",
-          style: const TextStyle(fontWeight: FontWeight.bold),
+          _isOwnerMode ? "Owner Hub" : "SAYYARAH",
+          style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.1),
         ),
         actions: [
           if (!_isOwnerMode)
@@ -2845,7 +2962,7 @@ class _HomePageState extends State<HomePage> {
         .where((b) => b.status == "Confirmed" || b.status == "In Progress" || b.status == "Completed")
         .toList();
     final int totalEarnings = confirmedOrCompleted.fold<int>(
-        0, (sum, b) => sum + b.totalPrice);
+        0, (total, b) => total + b.totalPrice);
     final int activeBookingsCount = hostBookings
         .where((b) => b.status == "Pending" || b.status == "Confirmed" || b.status == "In Progress")
         .length;
@@ -5581,6 +5698,429 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  // ================= 3 NEW PROFILE DIALOGS =================
+  void _showEditProfileDialog() {
+    final nameCtrl = TextEditingController(text: _currentUserName);
+    final phoneCtrl = TextEditingController();
+    final locationCtrl = TextEditingController(text: _selectedCity != "All Cities" ? _selectedCity : "Islamabad, Pakistan");
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: Colors.white10),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.person_outline, color: AppTheme.primary, size: 24),
+            SizedBox(width: 10),
+            Text("Edit Personal Profile", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text("FULL NAME", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              TextField(
+                controller: nameCtrl,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: const Color(0xFF282828),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                  prefixIcon: const Icon(Icons.person, color: Colors.grey, size: 18),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text("PHONE NUMBER", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              TextField(
+                controller: phoneCtrl,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white, fontSize: 14, letterSpacing: 1.1),
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(9),
+                ],
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: const Color(0xFF282828),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                  prefixIcon: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.phone, color: Colors.grey, size: 18),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: AppTheme.primary.withValues(alpha: 0.4), width: 0.8),
+                          ),
+                          child: const Text(
+                            "03",
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(height: 18, width: 1, color: Colors.white24),
+                      ],
+                    ),
+                  ),
+                  hintText: "123456789",
+                  hintStyle: const TextStyle(color: Colors.white30),
+                  helperText: "First 2 digits (03) are fixed. Enter remaining 9 digits.",
+                  helperStyle: const TextStyle(color: Colors.grey, fontSize: 10),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text("CITY / LOCATION", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              TextField(
+                controller: locationCtrl,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: const Color(0xFF282828),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                  prefixIcon: const Icon(Icons.location_on, color: Colors.grey, size: 18),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () async {
+              final newName = nameCtrl.text.trim();
+              if (newName.isNotEmpty) {
+                activeUserName = newName;
+                name = newName;
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString("app_user_active_name", newName);
+                final user = FirebaseAuth.instance.currentUser;
+                if (user != null) {
+                  final enteredPhone = phoneCtrl.text.trim();
+                  final fullPhone = enteredPhone.isNotEmpty ? "03$enteredPhone" : "";
+                  final updateData = <String, dynamic>{
+                    'name': newName,
+                    'location': locationCtrl.text.trim(),
+                  };
+                  if (fullPhone.isNotEmpty) {
+                    updateData['phone'] = fullPhone;
+                    updateData['phoneNumber'] = fullPhone;
+                  }
+                  FirebaseFirestore.instance.collection('users').doc(user.uid).set(updateData, SetOptions(merge: true));
+                }
+              }
+              Navigator.pop(ctx);
+              setState(() {});
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text("✅ Profile details updated successfully!"),
+                    backgroundColor: Colors.green,
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            },
+            child: const Text("Save Changes", style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSavedAddressesDialog() {
+    final List<Map<String, String>> defaultAddresses = [
+      {"label": "Home", "address": "House #12, Sector F-7/2, Islamabad", "icon": "home"},
+      {"label": "Office / Work", "address": "Tower B, Blue Area, Islamabad", "icon": "work"},
+      {"label": "Airport Pickup", "address": "Islamabad International Airport, Terminal 1", "icon": "flight"},
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Row(
+              children: [
+                Icon(Icons.location_on_outlined, color: AppTheme.primary, size: 24),
+                SizedBox(width: 10),
+                Text("Saved Delivery & Pickup Addresses", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            const SizedBox(height: 6),
+            const Text("Manage your frequent locations for fast vehicle delivery and pickup.", style: TextStyle(color: Colors.grey, fontSize: 12)),
+            const SizedBox(height: 20),
+            ...defaultAddresses.map((addr) => Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF282828),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      addr["icon"] == "home" ? Icons.home : (addr["icon"] == "work" ? Icons.work : Icons.flight_takeoff),
+                      color: AppTheme.primary,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(addr["label"]!, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                        const SizedBox(height: 2),
+                        Text(addr["address"]!, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.check_circle, color: Colors.greenAccent, size: 18),
+                ],
+              ),
+            )),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text("Add New Address", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("Location saved! You can select this address during checkout."),
+                      backgroundColor: AppTheme.primary,
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showLanguagePreferencesDialog() {
+    String selectedLanguage = appLanguageNotifier.value;
+    ThemeMode selectedThemeMode = themeModeNotifier.value;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setSheetState) => Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Row(
+                children: [
+                  Icon(Icons.palette_outlined, color: AppTheme.primary, size: 24),
+                  SizedBox(width: 10),
+                  Text("Display Theme & Preferences", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              const SizedBox(height: 6),
+              const Text("Select your preferred app display theme and interface language.", style: TextStyle(color: Colors.grey, fontSize: 12)),
+              const SizedBox(height: 18),
+
+              // THEME MODE SECTION
+              const Text("APPEARANCE THEME", style: TextStyle(color: AppTheme.primaryLight, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+              const SizedBox(height: 8),
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF282828),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Column(
+                  children: [
+                    RadioListTile<ThemeMode>(
+                      value: ThemeMode.dark,
+                      groupValue: selectedThemeMode,
+                      activeColor: AppTheme.primary,
+                      title: const Row(
+                        children: [
+                          Icon(Icons.dark_mode_outlined, color: Colors.cyanAccent, size: 18),
+                          SizedBox(width: 8),
+                          Text("Dark Mode (OLED Default)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                        ],
+                      ),
+                      subtitle: const Text("Deep dark OLED background with electric cyan accents", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setSheetState(() => selectedThemeMode = val);
+                          saveThemeToLocalStorage(val);
+                        }
+                      },
+                    ),
+                    const Divider(color: Colors.white10, height: 1),
+                    RadioListTile<ThemeMode>(
+                      value: ThemeMode.light,
+                      groupValue: selectedThemeMode,
+                      activeColor: AppTheme.primary,
+                      title: const Row(
+                        children: [
+                          Icon(Icons.light_mode_outlined, color: Colors.amberAccent, size: 18),
+                          SizedBox(width: 8),
+                          Text("Light Mode (Clean White)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                        ],
+                      ),
+                      subtitle: const Text("Clean off-white background with dark contrast text", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setSheetState(() => selectedThemeMode = val);
+                          saveThemeToLocalStorage(val);
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 18),
+
+              // LANGUAGE SECTION
+              const Text("INTERFACE LANGUAGE", style: TextStyle(color: AppTheme.primaryLight, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+              const SizedBox(height: 8),
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF282828),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Column(
+                  children: [
+                    RadioListTile<String>(
+                      value: "English",
+                      groupValue: selectedLanguage,
+                      activeColor: AppTheme.primary,
+                      title: const Text("English (Default)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                      subtitle: const Text("Standard international interface", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setSheetState(() => selectedLanguage = val);
+                          saveLanguageToLocalStorage(val);
+                        }
+                      },
+                    ),
+                    const Divider(color: Colors.white10, height: 1),
+                    RadioListTile<String>(
+                      value: "Urdu",
+                      groupValue: selectedLanguage,
+                      activeColor: AppTheme.primary,
+                      title: const Text("اردو (Urdu)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                      subtitle: const Text("Urdu language localized interface", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setSheetState(() => selectedLanguage = val);
+                          saveLanguageToLocalStorage(val);
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () {
+                    saveThemeToLocalStorage(selectedThemeMode);
+                    saveLanguageToLocalStorage(selectedLanguage);
+                    Navigator.pop(ctx);
+                    setState(() {});
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(selectedLanguage == "Urdu"
+                              ? "✅ ترجیحات محفوظ ہو گئیں (اردو زبان فعال)۔"
+                              : "✅ Preferences saved (English Language Active)."),
+                          backgroundColor: AppTheme.primary,
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
+                  },
+                  child: const Text("Save Preferences", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   // ================= TAB 3: PROFILE TAB =================
   Widget _buildProfileTab() {
     if (widget.isGuest) {
@@ -5685,32 +6225,7 @@ class _HomePageState extends State<HomePage> {
                 setState(() => _currentIndex = 2);
               },
             ),
-            _buildProfileOption(
-              icon: Icons.account_balance_wallet_outlined,
-              title: "Payment Methods & Security Deposit",
-              subtitle: "Cash on Handover, EasyPaisa, JazzCash & Cards",
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Payment methods and refundable security deposit settings"),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
-              },
-            ),
-            _buildProfileOption(
-              icon: Icons.help_outline,
-              title: "Help & Customer Support",
-              subtitle: "24/7 Roadside assistance & live help",
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Customer Helpline: +92 51 111-RENT (7368)"),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
-              },
-            ),
+
           ] else ...[
             // OWNER (HOST) ONLY
             _buildProfileOption(
@@ -5785,21 +6300,48 @@ class _HomePageState extends State<HomePage> {
 
           // COMMON OPTIONS
           _buildProfileOption(
+            icon: Icons.person_outline,
+            title: "Edit Personal Profile",
+            subtitle: "Update name, phone number & location details",
+            onTap: _showEditProfileDialog,
+          ),
+          _buildProfileOption(
+            icon: Icons.location_on_outlined,
+            title: "Saved Delivery Addresses",
+            subtitle: "Manage pickup, drop-off & home addresses",
+            onTap: _showSavedAddressesDialog,
+          ),
+          _buildProfileOption(
+            icon: Icons.language,
+            title: "Language & Preferences",
+            subtitle: "App language (English / اردو), theme & dark mode",
+            onTap: _showLanguagePreferencesDialog,
+          ),
+          _buildProfileOption(
             icon: Icons.notifications_none,
             title: "Notifications",
             subtitle: "Booking reminders & trip alerts",
             onTap: () => _showNotificationsSheet(context),
           ),
           _buildProfileOption(
-            icon: Icons.settings_outlined,
-            title: "Settings & Privacy",
-            subtitle: "Security, language & app preferences",
+            icon: Icons.help_outline,
+            title: "Help & Customer Support",
+            subtitle: "24/7 Roadside assistance, WhatsApp & live help",
             onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text("Settings and privacy controls"),
-                  duration: Duration(seconds: 1),
-                ),
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SupportScreen()),
+              );
+            },
+          ),
+          _buildProfileOption(
+            icon: Icons.shield_outlined,
+            title: "Security & Privacy",
+            subtitle: "Account security, permissions & privacy policy",
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SecurityPrivacyScreen()),
               );
             },
           ),

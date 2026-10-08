@@ -7,7 +7,6 @@ import 'home.dart';
 import 'user_data.dart';
 import 'auth_service.dart';
 import 'firestore_service.dart';
-import 'admin_panel_screen.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -42,28 +41,16 @@ class _LoginPageState extends State<LoginPage> {
         final userRole = (profile?['role']?.toString() ?? "").toLowerCase().trim();
 
         if (userRole == "admin") {
-          activeUserId = current.uid;
-          activeUserEmail = userEmail;
-          activeUserName = userName.isNotEmpty ? userName : "Administrator";
-          activeUserRole = "admin";
-          name = activeUserName;
-          email = userEmail;
-
-          SharedPreferences.getInstance().then((prefs) {
-            prefs.setString("app_user_active_id", current.uid);
-            prefs.setString("app_user_active_email", userEmail);
-            prefs.setString("app_user_active_name", activeUserName);
-            prefs.setString("app_user_role", "admin");
-          });
-
+          await _authService.signOut();
           if (mounted) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => AdminPanelScreen(
-                  adminEmail: userEmail,
-                  adminName: activeUserName,
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  "ℹ️ Administrator access is managed via the official Web Admin Panel (http://localhost:3000).",
                 ),
+                backgroundColor: AppTheme.primary,
+                duration: Duration(seconds: 5),
+                behavior: SnackBarBehavior.floating,
               ),
             );
           }
@@ -78,7 +65,9 @@ class _LoginPageState extends State<LoginPage> {
             ((current.uid.isNotEmpty && c.ownerId == current.uid) ||
              (userEmail.isNotEmpty && c.ownerEmail.trim().toLowerCase() == userEmail.trim().toLowerCase())));
 
-        final bool isOwner = hasApprovedCars;
+        final bool isOwner = (profile?['isOwnerApproved'] == true ||
+            (profile?['ownerStatus'] ?? '').toString().toUpperCase() == 'APPROVED') ||
+            hasApprovedCars;
 
         activeUserId = current.uid;
         activeUserEmail = userEmail;
@@ -158,29 +147,31 @@ class _LoginPageState extends State<LoginPage> {
       final userRole = (userData?['role']?.toString() ?? "customer").toLowerCase();
 
       if (userRole == "admin") {
-        // Admin Login — role verified from Firestore
-        activeUserId = userId;
-        activeUserName = userName.isNotEmpty ? userName : "Administrator";
-        activeUserEmail = enteredEmail;
-        activeUserRole = "admin";
-        name = activeUserName;
-        email = enteredEmail;
-
-        SharedPreferences.getInstance().then((prefs) {
-          prefs.setString("app_user_active_id", userId);
-          prefs.setString("app_user_active_email", enteredEmail);
-          prefs.setString("app_user_active_name", activeUserName);
-          prefs.setString("app_user_role", "admin");
-        });
-
+        setState(() => _isLoading = false);
+        await _authService.signOut();
         if (!mounted) return;
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => AdminPanelScreen(
-              adminEmail: enteredEmail,
-              adminName: activeUserName,
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Row(
+              children: [
+                Icon(Icons.computer_rounded, color: AppTheme.primary, size: 24),
+                SizedBox(width: 10),
+                Text("Web Admin Panel", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ],
             ),
+            content: const Text(
+              "Administrator accounts must log in via the official Web Admin Panel.\n\nPlease open the admin dashboard in your web browser:\n\n👉 http://localhost:3000",
+              style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.5),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("Got It", style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.bold)),
+              ),
+            ],
           ),
         );
         return;
@@ -193,7 +184,9 @@ class _LoginPageState extends State<LoginPage> {
           ((userId.isNotEmpty && c.ownerId == userId) ||
            c.ownerEmail.trim().toLowerCase() == enteredEmail.trim().toLowerCase()));
 
-      final bool isOwner = hasApprovedCars;
+      final bool isOwner = (userData?['isOwnerApproved'] == true ||
+          (userData?['ownerStatus'] ?? '').toString().toUpperCase() == 'APPROVED') ||
+          hasApprovedCars;
 
       chatMessagesList.clear();
       name = userName;
@@ -356,28 +349,25 @@ class _LoginPageState extends State<LoginPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 40),
-              const Center(
-                child: Text(
-                  "Welcome Back",
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                  ),
+              const SizedBox(height: 20),
+              Center(
+                child: Image.asset(
+                  'images/sayyarah-logo.png',
+                  width: 250,
+                  fit: BoxFit.contain,
                 ),
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 6),
               const Center(
                 child: Text(
                   "Login to continue renting cars",
                   style: TextStyle(
                     color: Colors.grey,
-                    fontSize: 15,
+                    fontSize: 14,
                   ),
                 ),
               ),
-              const SizedBox(height: 40),
+              const SizedBox(height: 30),
               const Text(
                 "Email",
                 style: TextStyle(

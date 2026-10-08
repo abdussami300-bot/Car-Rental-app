@@ -1,11 +1,11 @@
 {
-    "name": "untitled2",
-    "short_name": "untitled2",
+    "name": "SAYYARAH - Car Rental",
+    "short_name": "SAYYARAH",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#121212",
+    "theme_color": "#00B4D8",
+    "description": "Safar Apna, Ride Apni.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

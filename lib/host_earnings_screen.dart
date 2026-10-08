@@ -73,11 +73,19 @@ class _HostEarningsScreenState extends State<HostEarningsScreen> {
       text: currentHostPayout.effectiveIban.toUpperCase(),
     );
 
+    String extractNineDigits(String raw) {
+      String clean = raw.replaceAll(RegExp(r'\D+'), '');
+      if (clean.startsWith('92')) clean = clean.substring(2);
+      if (clean.startsWith('03')) clean = clean.substring(2);
+      else if (clean.startsWith('3')) clean = clean.substring(1);
+      return clean.length > 9 ? clean.substring(0, 9) : clean;
+    }
+
     _easypaisaTitleController = TextEditingController(text: currentHostPayout.easypaisaTitle.toUpperCase());
-    _easypaisaNumberController = TextEditingController(text: currentHostPayout.easypaisaNumber);
+    _easypaisaNumberController = TextEditingController(text: extractNineDigits(currentHostPayout.easypaisaNumber));
 
     _jazzcashTitleController = TextEditingController(text: currentHostPayout.jazzcashTitle.toUpperCase());
-    _jazzcashNumberController = TextEditingController(text: currentHostPayout.jazzcashNumber);
+    _jazzcashNumberController = TextEditingController(text: extractNineDigits(currentHostPayout.jazzcashNumber));
   }
 
   @override
@@ -106,9 +114,9 @@ class _HostEarningsScreenState extends State<HostEarningsScreen> {
     return RegExp(r'^[A-Z0-9]{8,24}$').hasMatch(clean);
   }
 
-  bool _validate11DigitPhone(String raw) {
-    final clean = raw.replaceAll(RegExp(r'\s+'), '');
-    return clean.length == 11 && RegExp(r'^\d{11}$').hasMatch(clean);
+  bool _validate9DigitPhone(String raw) {
+    final clean = raw.replaceAll(RegExp(r'\D+'), '');
+    return clean.length == 9;
   }
 
   Future<void> _saveAllPaymentDetails() async {
@@ -117,14 +125,14 @@ class _HostEarningsScreenState extends State<HostEarningsScreen> {
     final bankIbanClean = _cleanIban(_bankIbanController.text);
 
     final epTitle = _easypaisaTitleController.text.trim().toUpperCase();
-    final epNumber = _easypaisaNumberController.text.replaceAll(RegExp(r'\s+'), '');
+    final epDigits = _easypaisaNumberController.text.replaceAll(RegExp(r'\D+'), '');
 
     final jcTitle = _jazzcashTitleController.text.trim().toUpperCase();
-    final jcNumber = _jazzcashNumberController.text.replaceAll(RegExp(r'\s+'), '');
+    final jcDigits = _jazzcashNumberController.text.replaceAll(RegExp(r'\D+'), '');
 
     final bool isBankFilled = bankTitle.isNotEmpty || bankIbanClean.isNotEmpty;
-    final bool isEpFilled = epTitle.isNotEmpty || epNumber.isNotEmpty;
-    final bool isJcFilled = jcTitle.isNotEmpty || jcNumber.isNotEmpty;
+    final bool isEpFilled = epTitle.isNotEmpty || epDigits.isNotEmpty;
+    final bool isJcFilled = jcTitle.isNotEmpty || jcDigits.isNotEmpty;
 
     if (!isBankFilled && !isEpFilled && !isJcFilled) {
       _showErrorSnackBar("Please configure at least ONE payment method (Bank, Easypaisa, or JazzCash).");
@@ -153,12 +161,12 @@ class _HostEarningsScreenState extends State<HostEarningsScreen> {
         _showErrorSnackBar("Easypaisa Account Title is required.");
         return;
       }
-      if (epNumber.isEmpty) {
+      if (epDigits.isEmpty) {
         _showErrorSnackBar("Easypaisa Account Number is required.");
         return;
       }
-      if (!_validate11DigitPhone(epNumber)) {
-        _showErrorSnackBar("Easypaisa number must be exactly 11 digits (e.g. 03001234567).");
+      if (!_validate9DigitPhone(epDigits)) {
+        _showErrorSnackBar("Easypaisa number must be exactly 9 digits (03 + 9 digits).");
         return;
       }
     }
@@ -169,17 +177,20 @@ class _HostEarningsScreenState extends State<HostEarningsScreen> {
         _showErrorSnackBar("JazzCash Account Title is required.");
         return;
       }
-      if (jcNumber.isEmpty) {
+      if (jcDigits.isEmpty) {
         _showErrorSnackBar("JazzCash Account Number is required.");
         return;
       }
-      if (!_validate11DigitPhone(jcNumber)) {
-        _showErrorSnackBar("JazzCash number must be exactly 11 digits (e.g. 03001234567).");
+      if (!_validate9DigitPhone(jcDigits)) {
+        _showErrorSnackBar("JazzCash number must be exactly 9 digits (03 + 9 digits).");
         return;
       }
     }
 
     setState(() => _isSaving = true);
+
+    final epFormatted = epDigits.isNotEmpty ? '03$epDigits' : '';
+    final jcFormatted = jcDigits.isNotEmpty ? '03$jcDigits' : '';
 
     currentHostPayout = HostPayoutSettings(
       payoutMethod: isBankFilled ? "Bank Account" : (isEpFilled ? "EasyPaisa" : "JazzCash"),
@@ -188,9 +199,9 @@ class _HostEarningsScreenState extends State<HostEarningsScreen> {
       accountNumberOrIban: isBankFilled ? bankIbanClean : "",
       bankIban: isBankFilled ? bankIbanClean : "",
       easypaisaTitle: isEpFilled ? epTitle : "",
-      easypaisaNumber: isEpFilled ? epNumber : "",
+      easypaisaNumber: isEpFilled ? epFormatted : "",
       jazzcashTitle: isJcFilled ? jcTitle : "",
-      jazzcashNumber: isJcFilled ? jcNumber : "",
+      jazzcashNumber: isJcFilled ? jcFormatted : "",
       totalWithdrawn: currentHostPayout.totalWithdrawn,
     );
 
@@ -388,12 +399,13 @@ class _HostEarningsScreenState extends State<HostEarningsScreen> {
                   style: const TextStyle(color: Colors.white),
                   inputFormatters: [
                     FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(11),
+                    LengthLimitingTextInputFormatter(9),
                   ],
                   decoration: _inputDecoration(
-                    "11-Digit Mobile Number (e.g. 03001234567)",
+                    "Easypaisa Number (9 digits)",
                     icon: Icons.phone,
-                    hint: "03001234567",
+                    hint: "123456789",
+                    isPhone: true,
                   ),
                 ),
               ],
@@ -424,12 +436,13 @@ class _HostEarningsScreenState extends State<HostEarningsScreen> {
                   style: const TextStyle(color: Colors.white),
                   inputFormatters: [
                     FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(11),
+                    LengthLimitingTextInputFormatter(9),
                   ],
                   decoration: _inputDecoration(
-                    "11-Digit Mobile Number (e.g. 03001234567)",
+                    "JazzCash Number (9 digits)",
                     icon: Icons.phone,
-                    hint: "03001234567",
+                    hint: "123456789",
+                    isPhone: true,
                   ),
                 ),
               ],
@@ -544,13 +557,52 @@ class _HostEarningsScreenState extends State<HostEarningsScreen> {
     );
   }
 
-  InputDecoration _inputDecoration(String label, {required IconData icon, String? hint}) {
+  InputDecoration _inputDecoration(
+    String label, {
+    required IconData icon,
+    String? hint,
+    bool isPhone = false,
+  }) {
     return InputDecoration(
       labelText: label,
       hintText: hint,
       hintStyle: const TextStyle(color: Colors.white24, fontSize: 12),
       labelStyle: const TextStyle(color: Colors.grey, fontSize: 13),
-      prefixIcon: Icon(icon, color: AppTheme.primary, size: 20),
+      prefixIcon: isPhone
+          ? Container(
+              padding: const EdgeInsets.only(left: 12, right: 8),
+              margin: const EdgeInsets.only(right: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, color: AppTheme.primary, size: 20),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: AppTheme.primary.withOpacity(0.4)),
+                    ),
+                    child: const Text(
+                      "03",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Container(
+                    width: 1,
+                    height: 18,
+                    color: Colors.white24,
+                  ),
+                ],
+              ),
+            )
+          : Icon(icon, color: AppTheme.primary, size: 20),
       filled: true,
       fillColor: const Color(0xFF141414),
       border: OutlineInputBorder(

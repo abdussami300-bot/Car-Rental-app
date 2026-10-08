@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 650" width="100%" height="100%">
+  <defs>
+    <style>
+      .charcoal { fill: #16191E; }
+      .cyan-accent { fill: #00A3FF; }
+      .brand-title {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        font-weight: 900;
+        font-size: 64px;
+        letter-spacing: 0.18em;
+        fill: #16191E;
+      }
+      .brand-tagline {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        font-weight: 500;
+        font-size: 26px;
+        letter-spacing: 0.04em;
+        fill: #22262C;
+      }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="100%" height="100%" fill="#FFFFFF"/>
+
+  <!-- Logo Mark Group -->
+  <g transform="translate(100, 70)">
+    <!-- Rear Silhouette & Body Panel -->
+    <path class="charcoal" d="M 40,240 C 35,210 40,165 75,150 C 110,135 150,135 180,115 C 205,100 230,85 270,75 C 240,100 225,120 220,140 C 230,135 250,130 270,140 C 230,155 210,185 220,220 C 190,200 160,200 135,225 C 130,175 90,175 80,225 C 75,235 60,240 40,240 Z" />
+
+    <!-- Sleek Coupe Body & Wheel Arch Cutouts -->
+    <path class="charcoal" d="M 40,240 C 45,200 80,180 100,180 C 135,180 150,215 155,240 L 230,240 C 220,210 240,180 270,180 C 310,180 340,205 340,240 L 450,240 C 455,200 485,175 520,175 C 555,175 580,205 585,240 L 610,240 C 625,230 630,200 620,180 C 600,165 570,150 530,135 C 470,110 420,85 365,75 C 310,65 240,75 190,95 C 145,115 100,140 60,180 C 45,195 38,215 40,240 Z" />
+
+    <!-- Dynamic Integrated S (Upper & Lower Fluid Arcs) -->
+    <!-- The Cyan Accent Streamline of the S -->
+    <path class="cyan-accent" d="M 270,80 C 320,70 380,85 435,120 C 390,120 330,110 280,120 C 245,128 220,148 230,175 C 245,210 320,205 370,225 C 410,240 420,265 390,285 C 350,305 270,295 240,270 C 265,265 295,260 320,250 C 360,235 340,220 310,215 C 250,205 200,180 215,130 C 225,95 250,85 270,80 Z" />
+    
+    <!-- Front Hood & Headlamp Contour -->
+    <path class="charcoal" d="M 435,120 C 490,140 550,165 600,195 C 585,190 565,185 545,190 C 510,155 465,135 435,120 Z" />
+  </g>
+
+  <!-- Brand Typography -->
+  <text x="400" y="480" text-anchor="middle" class="brand-title">SAYYARAH</text>
+  <text x="400" y="535" text-anchor="middle" class="brand-tagline">Safar Apna, Ride Apni.</text>
+</svg>

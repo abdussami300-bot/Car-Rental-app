@@ -2,11 +2,16 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:http/http.dart' as http;
 
 class StorageService {
   static final FirebaseStorage _storage = FirebaseStorage.instance;
 
-  /// Upload a single file to Firebase Storage (if available) or convert to Base64 Data URI (Free/Spark plan).
+  // Cloudinary credentials
+  static const String cloudinaryCloudName = "mirmx2v9";
+  static const String cloudinaryUploadPreset = "ydzmrbkc";
+
+  /// Upload a single file to Cloudinary, Firebase Storage, or fallback to Base64.
   static Future<String> uploadFile({
     required String localPath,
     required String destinationPath,
@@ -29,7 +34,19 @@ class StorageService {
         return localPath;
       }
 
-      // 1. Try Firebase Cloud Storage first (works if user upgraded to Blaze plan)
+      // 1. Try Cloudinary first (Instant, high CDN speed, no billing lock)
+      try {
+        final folder = destinationPath.contains('/')
+            ? destinationPath.substring(0, destinationPath.lastIndexOf('/'))
+            : null;
+        final cloudinaryUrl = await _uploadToCloudinary(file, folder: folder);
+        debugPrint("☁️ [Storage] Uploaded successfully to Cloudinary: $cloudinaryUrl");
+        return cloudinaryUrl;
+      } catch (cloudinaryError) {
+        debugPrint("ℹ️ [Storage] Cloudinary upload failed ($cloudinaryError). Trying Firebase Storage fallback...");
+      }
+
+      // 2. Try Firebase Cloud Storage fallback
       try {
         final ref = _storage.ref().child(destinationPath);
         final metadata = SettableMetadata(
@@ -44,10 +61,10 @@ class StorageService {
         debugPrint("☁️ [Storage] Uploaded successfully to Firebase Storage: $downloadUrl");
         return downloadUrl;
       } catch (storageError) {
-        debugPrint("ℹ️ [Storage] Firebase Storage unavailable ($storageError). Falling back to Free Base64 Data URI.");
+        debugPrint("ℹ️ [Storage] Firebase Storage unavailable ($storageError). Falling back to Base64 Data URI.");
       }
 
-      // 2. Free (Spark) plan fallback: Convert to compact Base64 Data URI
+      // 3. Fallback: Convert to Base64 Data URI
       final bytes = await file.readAsBytes();
       final mime = localPath.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
       final base64String = base64Encode(bytes);
@@ -161,6 +178,29 @@ class StorageService {
       localPath: localPath,
       destinationPath: dest,
     );
+  }
+
+  /// Direct HTTP Upload to Cloudinary using Unsigned Preset
+  static Future<String> _uploadToCloudinary(File file, {String? folder}) async {
+    final uri = Uri.parse("https://api.cloudinary.com/v1_1/$cloudinaryCloudName/image/upload");
+    final request = http.MultipartRequest("POST", uri)
+      ..fields['upload_preset'] = cloudinaryUploadPreset;
+
+    if (folder != null && folder.isNotEmpty) {
+      request.fields['folder'] = folder;
+    }
+
+    request.files.add(await http.MultipartFile.fromPath('file', file.path));
+
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      final data = jsonDecode(response.body);
+      return data['secure_url'] as String;
+    } else {
+      throw Exception("Cloudinary HTTP ${response.statusCode}: ${response.body}");
+    }
   }
 }
 

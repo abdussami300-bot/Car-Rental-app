@@ -41,7 +41,6 @@ class AuthService {
       }
 
       final cleanEmail = email.trim().toLowerCase();
-      final cleanRole = role.trim().toLowerCase() == "owner" ? "owner" : "customer";
 
       // 3. Firestore ke 'users' collection mein user ka data save karna
       try {
@@ -49,11 +48,18 @@ class AuthService {
           'uid': user.uid,
           'name': name.trim(),
           'email': cleanEmail,
-          'role': cleanRole,
+          'role': 'customer',
+          'accountType': 'customer',
+          'ownerStatus': 'NOT_APPLIED',
+          'isOwnerApproved': false,
+          'currentMode': 'customer',
           'verificationStatus': 'unverified',
           'isVerified': false,
+          'isNewUser': true,
           'cnicNumber': '',
+          'cnicStatus': 'NOT_SUBMITTED',
           'licenseNumber': '',
+          'licenseStatus': 'NOT_SUBMITTED',
           'createdAt': FieldValue.serverTimestamp(),
         }).timeout(const Duration(seconds: 5));
       } catch (e) {
@@ -299,16 +305,76 @@ class AuthService {
         'verificationSubmittedAt': FieldValue.serverTimestamp(),
         'verificationRejectionReason': '', // Reset any previous rejection note
       };
+
+      if (user.displayName != null && user.displayName!.trim().isNotEmpty) {
+        updateData['name'] = user.displayName!.trim();
+      } else if (activeUserName.trim().isNotEmpty) {
+        updateData['name'] = activeUserName.trim();
+      }
+
+      if (user.email != null && user.email!.trim().isNotEmpty) {
+        updateData['email'] = user.email!.trim();
+      } else if (activeUserEmail.trim().isNotEmpty) {
+        updateData['email'] = activeUserEmail.trim();
+      }
+
+      if (user.phoneNumber != null && user.phoneNumber!.trim().isNotEmpty) {
+        updateData['phone'] = user.phoneNumber!.trim();
+      }
+      DocumentSnapshot? existingDoc;
+      try {
+        existingDoc = await _firestore.collection('users').doc(user.uid).get();
+      } catch (_) {}
+
+      final bool alreadyExisted = existingDoc != null && existingDoc.exists;
+      final existingData = (alreadyExisted && existingDoc.data() != null)
+          ? existingDoc.data() as Map<String, dynamic>
+          : <String, dynamic>{};
+
+      final bool wasPreviouslyRejected = (existingData['verificationStatus'] == 'rejected') ||
+          (existingData['verificationRejectionReason'] != null &&
+              existingData['verificationRejectionReason'].toString().trim().isNotEmpty);
+
+      updateData['isExistingUser'] = alreadyExisted;
+      updateData['isProfileUpdate'] = alreadyExisted;
+      updateData['submissionType'] = wasPreviouslyRejected
+          ? 'resubmission'
+          : (alreadyExisted ? 'update' : 'new');
+      updateData['verificationType'] = isOwner ? 'host' : 'customer';
+
+      final String existingCnic = (existingData['cnicNumber'] ?? '').toString().trim();
+      final String existingLicense = (existingData['licenseNumber'] ?? '').toString().trim();
+
+      // CNIC immutability: If user already had a saved CNIC, preserve it and mark photo updates as UPDATED_REVIEW_REQUIRED
+      if (existingCnic.isNotEmpty) {
+        updateData['cnicNumber'] = existingCnic;
+        if ((cnicFrontUrl != null && cnicFrontUrl.isNotEmpty) || (cnicBackUrl != null && cnicBackUrl.isNotEmpty)) {
+          updateData['cnicStatus'] = 'UPDATED_REVIEW_REQUIRED';
+        }
+      } else if (cnic.trim().isNotEmpty) {
+        updateData['cnicNumber'] = cnic.trim();
+        updateData['cnicStatus'] = 'PENDING_REVIEW';
+      }
+
       if (cnicFrontUrl != null && cnicFrontUrl.isNotEmpty) {
         updateData['cnicFrontUrl'] = cnicFrontUrl;
       }
       if (cnicBackUrl != null && cnicBackUrl.isNotEmpty) {
         updateData['cnicBackUrl'] = cnicBackUrl;
       }
+
       if (!isOwner) {
-        if (license != null && license.trim().isNotEmpty) {
+        // Customer license immutability
+        if (existingLicense.isNotEmpty) {
+          updateData['licenseNumber'] = existingLicense;
+          if (licenseUrl != null && licenseUrl.isNotEmpty) {
+            updateData['licenseStatus'] = 'UPDATED_REVIEW_REQUIRED';
+          }
+        } else if (license != null && license.trim().isNotEmpty) {
           updateData['licenseNumber'] = license.trim();
+          updateData['licenseStatus'] = 'PENDING_REVIEW';
         }
+
         if (expiry != null && expiry.trim().isNotEmpty) {
           updateData['licenseExpiry'] = expiry.trim();
         }
@@ -316,7 +382,12 @@ class AuthService {
           updateData['licenseUrl'] = licenseUrl;
         }
       } else {
+        // Owner Application: User remains customer until Admin explicitly approves!
         updateData['isHostVerified'] = false;
+        updateData['isOwnerApproved'] = false;
+        updateData['ownerStatus'] = 'PENDING_REVIEW';
+        updateData['requestedRole'] = 'owner';
+        updateData['isHostRequested'] = true;
       }
 
       await _firestore.collection('users').doc(user.uid).set(updateData, SetOptions(merge: true));

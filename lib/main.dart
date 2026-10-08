@@ -4,9 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'login.dart';
+import 'splash_screen.dart';
 import 'user_data.dart';
 import 'firestore_service.dart';
-import 'admin_panel_screen.dart';
+import 'theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,6 +33,8 @@ void main() async {
 
   await loadDeletedCarIdsFromLocalStorage();
   await Future.wait([
+    loadThemeFromLocalStorage(),
+    loadLanguageFromLocalStorage(),
     loadCarsFromLocalStorage(),
     loadBookingsFromLocalStorage(),
     loadReadNotificationsFromLocalStorage(),
@@ -55,12 +58,26 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: initialScreen ?? const LoginPage(),
-      routes: {
-        '/admin': (context) => const AdminPanelScreen(),
-        '/login': (context) => const LoginPage(),
+    return ValueListenableBuilder<String>(
+      valueListenable: appLanguageNotifier,
+      builder: (context, currentLanguage, _) {
+        return ValueListenableBuilder<ThemeMode>(
+          valueListenable: themeModeNotifier,
+          builder: (context, currentMode, _) {
+            return MaterialApp(
+              title: 'SAYYARAH',
+              debugShowCheckedModeBanner: false,
+              theme: AppTheme.lightThemeData,
+              darkTheme: AppTheme.darkThemeData,
+              themeMode: currentMode,
+              home: initialScreen ?? const SplashScreen(),
+              routes: {
+                '/login': (context) => const LoginPage(),
+                '/splash': (context) => const SplashScreen(),
+              },
+            );
+          },
+        );
       },
     );
   }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -23,6 +24,24 @@ class _VerificationScreenState extends State<VerificationScreen> {
   late TextEditingController _cnicController;
   late TextEditingController _licenseController;
   late TextEditingController _expiryController;
+  late TextEditingController _licenseDigitsController;
+
+  String _selectedLicenseCityCode = "IS";
+  String _selectedLicenseCityName = "Islamabad";
+  String _selectedLicenseYear = "2022";
+
+  final Map<String, String> _pakistanCityCodes = {
+    "Islamabad": "IS",
+    "Lahore": "LH",
+    "Karachi": "KA",
+    "Rawalpindi": "RI",
+    "Peshawar": "PE",
+    "Quetta": "QU",
+    "Multan": "MN",
+    "Faisalabad": "FD",
+    "Gujranwala": "GA",
+    "Sialkot": "SK",
+  };
 
   File? _cnicFrontFile;
   File? _cnicBackFile;
@@ -36,12 +55,71 @@ class _VerificationScreenState extends State<VerificationScreen> {
   bool _isSaving = false;
   StreamSubscription<DocumentSnapshot>? _userDocSub;
 
+  String _getFormattedLicenseString() {
+    final digits = _licenseDigitsController.text.trim();
+    return "$_selectedLicenseCityCode-$_selectedLicenseYear-$digits";
+  }
+
+  Future<void> _selectExpiryDate(BuildContext context) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: now.add(const Duration(days: 365 * 3)),
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365 * 10)),
+      builder: (context, child) => Theme(
+        data: ThemeData.dark().copyWith(
+          colorScheme: const ColorScheme.dark(
+            primary: AppTheme.primary,
+            surface: Color(0xFF1E1E1E),
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null) {
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      final formattedDate = "${picked.day} ${months[picked.month - 1]} ${picked.year}";
+      setState(() {
+        _expiryController.text = formattedDate;
+      });
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _cnicController = TextEditingController(text: currentUserVerification.cnicNumber);
-    _licenseController = TextEditingController(text: currentUserVerification.licenseNumber);
     _expiryController = TextEditingController(text: currentUserVerification.licenseExpiry);
+
+    final savedLicense = currentUserVerification.licenseNumber.trim();
+    String initialDigits = "";
+    if (savedLicense.isNotEmpty) {
+      final parts = savedLicense.split('-');
+      if (parts.length >= 3) {
+        final code = parts[0].toUpperCase();
+        final year = parts[1];
+        final digits = parts[2];
+
+        _pakistanCityCodes.forEach((cityName, cCode) {
+          if (cCode == code) {
+            _selectedLicenseCityName = cityName;
+            _selectedLicenseCityCode = cCode;
+          }
+        });
+        if (RegExp(r'^\d{4}$').hasMatch(year)) {
+          _selectedLicenseYear = year;
+        }
+        initialDigits = digits;
+      } else {
+        initialDigits = savedLicense.replaceAll(RegExp(r'\D'), '');
+      }
+    }
+
+    _licenseDigitsController = TextEditingController(
+      text: initialDigits.length > 6 ? initialDigits.substring(0, 6) : initialDigits,
+    );
+    _licenseController = TextEditingController(text: _getFormattedLicenseString());
 
     // Populate local or remote images
     if (currentUserVerification.cnicFrontPath.isNotEmpty) {
@@ -146,6 +224,7 @@ class _VerificationScreenState extends State<VerificationScreen> {
     _cnicController.dispose();
     _licenseController.dispose();
     _expiryController.dispose();
+    _licenseDigitsController.dispose();
     super.dispose();
   }
 
@@ -409,13 +488,23 @@ class _VerificationScreenState extends State<VerificationScreen> {
       });
     }
     if (!widget.isOwner) {
-      if (_licenseController.text.trim().isEmpty) {
+      final digits = _licenseDigitsController.text.trim();
+      if (digits.length < 6) {
         missing.add({
           'title': 'Driving License Number',
-          'subtitle': 'Valid Pakistani driving license number',
+          'subtitle': 'Must be 6 digits only (e.g. 123456)',
           'icon': Icons.drive_eta_outlined,
           'actionLabel': 'Fill',
           'onAction': null,
+        });
+      }
+      if (_expiryController.text.trim().isEmpty) {
+        missing.add({
+          'title': 'License Expiry Date',
+          'subtitle': 'Select expiry date via calendar picker',
+          'icon': Icons.event_outlined,
+          'actionLabel': 'Select',
+          'onAction': () => _selectExpiryDate(context),
         });
       }
       if (!hasLicense) {
@@ -456,13 +545,15 @@ class _VerificationScreenState extends State<VerificationScreen> {
       final finalFrontUrl = uploadedUrls['cnicFront'] ?? _cnicFrontUrl ?? '';
       final finalBackUrl = uploadedUrls['cnicBack'] ?? _cnicBackUrl ?? '';
       final finalLicenseUrl = widget.isOwner ? '' : (uploadedUrls['license'] ?? _licenseUrl ?? '');
+      final formattedLicense = _getFormattedLicenseString();
+      _licenseController.text = formattedLicense;
 
       // Mark status as 'pending' in Firestore (never self-approve)
       await AuthService().submitUserVerification(
         cnic: _cnicController.text.trim(),
         cnicFrontUrl: finalFrontUrl,
         cnicBackUrl: finalBackUrl,
-        license: widget.isOwner ? null : _licenseController.text.trim(),
+        license: widget.isOwner ? null : formattedLicense,
         expiry: widget.isOwner ? null : _expiryController.text.trim(),
         licenseUrl: finalLicenseUrl,
         isOwner: widget.isOwner,
@@ -472,7 +563,7 @@ class _VerificationScreenState extends State<VerificationScreen> {
         cnicNumber: _cnicController.text.trim(),
         cnicFrontPath: _cnicFrontFile?.path ?? finalFrontUrl,
         cnicBackPath: _cnicBackFile?.path ?? finalBackUrl,
-        licenseNumber: widget.isOwner ? "" : _licenseController.text.trim(),
+        licenseNumber: widget.isOwner ? "" : formattedLicense,
         licenseExpiry: widget.isOwner ? "" : _expiryController.text.trim(),
         licenseImagePath: widget.isOwner ? "" : (_licenseFile?.path ?? finalLicenseUrl),
         status: "pending",
@@ -504,6 +595,8 @@ class _VerificationScreenState extends State<VerificationScreen> {
     final isVerified = currentUserVerification.isVerified;
     final isPending = currentUserVerification.isPending;
     final isRejected = currentUserVerification.isRejected;
+    final bool hasExistingCnic = currentUserVerification.cnicNumber.trim().isNotEmpty;
+    final bool hasExistingLicense = currentUserVerification.licenseNumber.trim().isNotEmpty;
 
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
@@ -743,18 +836,47 @@ class _VerificationScreenState extends State<VerificationScreen> {
               const SizedBox(height: 12),
               TextFormField(
                 controller: _cnicController,
-                enabled: !isPending && !_isSaving,
-                style: TextStyle(color: isPending ? Colors.white60 : Colors.white),
+                enabled: !hasExistingCnic && !isPending && !_isSaving,
+                readOnly: hasExistingCnic,
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  CnicInputFormatter(),
+                ],
+                style: TextStyle(
+                  color: (hasExistingCnic || isPending) ? Colors.white70 : Colors.white,
+                  fontWeight: hasExistingCnic ? FontWeight.bold : FontWeight.normal,
+                ),
                 decoration: InputDecoration(
-                  labelText: "CNIC Number (e.g. 61101-1234567-1)",
+                  labelText: "CNIC Number (13 Digits)",
+                  hintText: "12345-1234567-1",
                   labelStyle: const TextStyle(color: Colors.grey),
                   prefixIcon: const Icon(Icons.badge_outlined, color: AppTheme.primary),
+                  suffixIcon: hasExistingCnic
+                      ? const Padding(
+                          padding: EdgeInsets.only(right: 12),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.lock, color: Colors.greenAccent, size: 18),
+                              SizedBox(width: 4),
+                              Text("LOCKED", style: TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                        )
+                      : null,
+                  helperText: hasExistingCnic
+                      ? "🔒 CNIC number is permanently locked to your account for security."
+                      : null,
+                  helperStyle: const TextStyle(color: Colors.greenAccent, fontSize: 11),
                   filled: true,
                   fillColor: const Color(0xFF1E1E1E),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                 ),
                 validator: (val) {
                   if (val == null || val.trim().isEmpty) return "Please enter your CNIC";
+                  final digits = val.replaceAll(RegExp(r'\D'), '');
+                  if (digits.length < 13) return "CNIC must be 13 digits (e.g. 12345-1234567-1)";
                   return null;
                 },
               ),
@@ -786,45 +908,186 @@ class _VerificationScreenState extends State<VerificationScreen> {
 
                 // DRIVING LICENSE SECTION
                 const Text(
-                  "2. Driving License",
+                  "2. Driving License Verification",
                   style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 12),
+
+                // CITY & ISSUE YEAR SELECTORS
+                Row(
+                  children: [
+                    // City Dropdown
+                    Expanded(
+                      flex: 3,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1E1E1E),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: _selectedLicenseCityName,
+                            dropdownColor: const Color(0xFF1E1E1E),
+                            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                            icon: const Icon(Icons.arrow_drop_down, color: AppTheme.primary),
+                            items: _pakistanCityCodes.keys.map((cityName) {
+                              final code = _pakistanCityCodes[cityName]!;
+                              return DropdownMenuItem<String>(
+                                value: cityName,
+                                child: Text("$cityName ($code)"),
+                              );
+                            }).toList(),
+                            onChanged: (hasExistingLicense || isPending || _isSaving)
+                                ? null
+                                : (val) {
+                                    if (val != null) {
+                                      setState(() {
+                                        _selectedLicenseCityName = val;
+                                        _selectedLicenseCityCode = _pakistanCityCodes[val]!;
+                                        _licenseController.text = _getFormattedLicenseString();
+                                      });
+                                    }
+                                  },
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+
+                    // Issue Year Dropdown
+                    Expanded(
+                      flex: 2,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1E1E1E),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: _selectedLicenseYear,
+                            dropdownColor: const Color(0xFF1E1E1E),
+                            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                            icon: const Icon(Icons.arrow_drop_down, color: AppTheme.primary),
+                            items: ["2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026"].map((yr) {
+                              return DropdownMenuItem<String>(
+                                value: yr,
+                                child: Text("Year: $yr"),
+                              );
+                            }).toList(),
+                            onChanged: (hasExistingLicense || isPending || _isSaving)
+                                ? null
+                                : (val) {
+                                    if (val != null) {
+                                      setState(() {
+                                        _selectedLicenseYear = val;
+                                        _licenseController.text = _getFormattedLicenseString();
+                                      });
+                                    }
+                                  },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 12),
+
+                // 6-DIGIT LICENSE NUMBER INPUT
                 TextFormField(
-                  controller: _licenseController,
-                  enabled: !isPending && !_isSaving,
-                  style: TextStyle(color: isPending ? Colors.white60 : Colors.white),
+                  controller: _licenseDigitsController,
+                  enabled: !hasExistingLicense && !isPending && !_isSaving,
+                  readOnly: hasExistingLicense,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(6),
+                  ],
+                  style: TextStyle(
+                    color: (hasExistingLicense || isPending) ? Colors.white70 : Colors.white,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1,
+                  ),
+                  onChanged: (_) {
+                    setState(() {
+                      _licenseController.text = _getFormattedLicenseString();
+                    });
+                  },
                   decoration: InputDecoration(
-                    labelText: "License Number (e.g. ISB-DL-98421)",
+                    labelText: "License Number (6 Digits Only)",
+                    hintText: "123456",
+                    prefixText: "$_selectedLicenseCityCode-$_selectedLicenseYear-",
+                    prefixStyle: const TextStyle(color: AppTheme.primaryLight, fontWeight: FontWeight.bold, fontSize: 14),
                     labelStyle: const TextStyle(color: Colors.grey),
                     prefixIcon: const Icon(Icons.directions_car_outlined, color: AppTheme.primary),
+                    suffixIcon: hasExistingLicense
+                        ? const Padding(
+                            padding: EdgeInsets.only(right: 12),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.lock, color: Colors.greenAccent, size: 18),
+                                SizedBox(width: 4),
+                                Text("LOCKED", style: TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                              ],
+                            ),
+                          )
+                        : null,
+                    helperText: hasExistingLicense
+                        ? "🔒 License number is permanently locked to your account."
+                        : null,
+                    helperStyle: const TextStyle(color: Colors.greenAccent, fontSize: 11),
                     filled: true,
                     fillColor: const Color(0xFF1E1E1E),
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                   ),
                   validator: (val) {
-                    if (val == null || val.trim().isEmpty) return "Please enter your license number";
+                    if (val == null || val.trim().length < 6) return "License number must be 6 digits";
                     return null;
                   },
                 ),
+
+                const SizedBox(height: 6),
+                Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: Text(
+                    "Format in Cloud: ${_getFormattedLicenseString()}",
+                    style: const TextStyle(color: AppTheme.primaryLight, fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ),
+
                 const SizedBox(height: 12),
-                TextFormField(
-                  controller: _expiryController,
-                  enabled: !isPending && !_isSaving,
-                  style: TextStyle(color: isPending ? Colors.white60 : Colors.white),
-                  decoration: InputDecoration(
-                    labelText: "License Expiry Date (e.g. 25 Dec 2028)",
-                    labelStyle: const TextStyle(color: Colors.grey),
-                    prefixIcon: const Icon(Icons.event_outlined, color: AppTheme.primary),
-                    filled: true,
-                    fillColor: const Color(0xFF1E1E1E),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+
+                // EXPIRY DATE FIELD (CALENDAR PICKER - NO MANUAL CHARS)
+                InkWell(
+                  onTap: (isPending || _isSaving) ? null : () => _selectExpiryDate(context),
+                  borderRadius: BorderRadius.circular(12),
+                  child: IgnorePointer(
+                    child: TextFormField(
+                      controller: _expiryController,
+                      enabled: !isPending && !_isSaving,
+                      readOnly: true,
+                      style: TextStyle(color: isPending ? Colors.white60 : Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "License Expiry Date (Calendar Pick)",
+                        hintText: "Tap to select expiry date",
+                        labelStyle: const TextStyle(color: Colors.grey),
+                        prefixIcon: const Icon(Icons.event_outlined, color: AppTheme.primary),
+                        suffixIcon: const Icon(Icons.calendar_month, color: Colors.grey, size: 20),
+                        filled: true,
+                        fillColor: const Color(0xFF1E1E1E),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      ),
+                      validator: (val) {
+                        if (val == null || val.trim().isEmpty) return "Please select license expiry date";
+                        return null;
+                      },
+                    ),
                   ),
-                  validator: (val) {
-                    if (val == null || val.trim().isEmpty) return "Please enter license expiry";
-                    return null;
-                  },
                 ),
+
                 const SizedBox(height: 12),
                 _buildUploadBox(
                   title: "Driving License Photo (Original Card)",

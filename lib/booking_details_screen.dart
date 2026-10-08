@@ -333,8 +333,10 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                   const SizedBox(height: 12),
                   _buildReceiptRow("Rental Mode", _booking.rentalModeOption),
                   _buildReceiptRow("Duration", "${_booking.days} Days (${_booking.pickupDate} to ${_booking.returnDate})"),
-                  _buildReceiptRow("Payment Method", _booking.paymentMethod),
-                  _buildReceiptRow("Security Deposit (Refundable)", "PKR ${_booking.securityDeposit}", isGreen: true),
+                  if (_booking.paymentMethod.isNotEmpty && _booking.paymentMethod != "Direct" && _booking.paymentMethod != "Pending")
+                    _buildReceiptRow("Payment Method", _booking.paymentMethod),
+                  if (_booking.securityDeposit > 0)
+                    _buildReceiptRow("Security Deposit (Refundable)", "PKR ${_booking.securityDeposit}", isGreen: true),
                   const Divider(color: Colors.white24, height: 20),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,

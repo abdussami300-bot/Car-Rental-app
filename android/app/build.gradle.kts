@@ -28,7 +28,6 @@ android {
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
-
     signingConfigs {
         create("release") {
             keyAlias = keystoreProperties.getProperty("keyAlias")
@@ -37,7 +36,6 @@ android {
             storePassword = keystoreProperties.getProperty("storePassword")
         }
     }
-
     defaultConfig {
         applicationId = "com.abdussami.carrental"
         minSdk = flutter.minSdkVersion

@@ -1774,6 +1774,10 @@ class VerificationData {
   final String licenseImagePath;
   final String status; // "unverified", "pending", "verified", "rejected"
   final bool isHostVerified;
+  final String ownerStatus; // "NOT_APPLIED", "PENDING_REVIEW", "APPROVED", "REJECTED", "NEEDS_CORRECTION", "SUSPENDED"
+  final bool isOwnerApproved;
+  final String cnicStatus; // "NOT_SUBMITTED", "PENDING_REVIEW", "UPDATED_REVIEW_REQUIRED", "VERIFIED", "REJECTED"
+  final String licenseStatus; // "NOT_SUBMITTED", "PENDING_REVIEW", "UPDATED_REVIEW_REQUIRED", "VERIFIED", "REJECTED"
   final DateTime? verifiedAt;
   final DateTime? submittedAt;
   final String rejectionReason;
@@ -1788,6 +1792,10 @@ class VerificationData {
     this.licenseImagePath = "",
     this.status = "unverified",
     this.isHostVerified = false,
+    this.ownerStatus = "NOT_APPLIED",
+    this.isOwnerApproved = false,
+    this.cnicStatus = "NOT_SUBMITTED",
+    this.licenseStatus = "NOT_SUBMITTED",
     this.verifiedAt,
     this.submittedAt,
     this.rejectionReason = "",
@@ -1811,6 +1819,10 @@ class VerificationData {
     "licenseImagePath": licenseImagePath,
     "status": status,
     "isHostVerified": isHostVerified,
+    "ownerStatus": ownerStatus,
+    "isOwnerApproved": isOwnerApproved,
+    "cnicStatus": cnicStatus,
+    "licenseStatus": licenseStatus,
     "verifiedAt": verifiedAt?.toIso8601String(),
     "submittedAt": submittedAt?.toIso8601String(),
     "rejectionReason": rejectionReason,
@@ -1819,8 +1831,20 @@ class VerificationData {
 
   factory VerificationData.fromJson(Map<dynamic, dynamic> json) {
     final rawStatus = (json["status"] ?? json["verificationStatus"])?.toString().toLowerCase().trim() ?? "";
-    final rawRole = (json["role"] ?? "").toString().toLowerCase().trim();
-    final bool hostApproved = json["isHostVerified"] == true || rawRole == "owner";
+    final rawOwnerStatus = (json["ownerStatus"] ?? "").toString().trim().toUpperCase();
+    final bool rawOwnerApproved = json["isOwnerApproved"] == true || rawOwnerStatus == "APPROVED";
+    final bool hostApproved = rawOwnerApproved || json["isHostVerified"] == true;
+
+    String resolvedOwnerStatus = rawOwnerStatus;
+    if (resolvedOwnerStatus.isEmpty) {
+      if (hostApproved) {
+        resolvedOwnerStatus = "APPROVED";
+      } else if (json["isHostRequested"] == true || rawStatus == "pending") {
+        resolvedOwnerStatus = "PENDING_REVIEW";
+      } else {
+        resolvedOwnerStatus = "NOT_APPLIED";
+      }
+    }
 
     String resolvedStatus = "unverified";
     if (rawStatus == "verified" || rawStatus == "approved" || json["isVerified"] == true || hostApproved) {
@@ -1846,6 +1870,10 @@ class VerificationData {
       licenseImagePath: json["licenseImagePath"]?.toString() ?? json["licenseUrl"]?.toString() ?? "",
       status: resolvedStatus,
       isHostVerified: hostApproved,
+      ownerStatus: resolvedOwnerStatus,
+      isOwnerApproved: hostApproved,
+      cnicStatus: json["cnicStatus"]?.toString() ?? (json["cnicNumber"] != null && json["cnicNumber"].toString().isNotEmpty ? "PENDING_REVIEW" : "NOT_SUBMITTED"),
+      licenseStatus: json["licenseStatus"]?.toString() ?? (json["licenseNumber"] != null && json["licenseNumber"].toString().isNotEmpty ? "PENDING_REVIEW" : "NOT_SUBMITTED"),
       rejectionReason: json["rejectionReason"]?.toString() ?? json["verificationRejectionReason"]?.toString() ?? "",
       rejectionIssues: parsedIssues,
       verifiedAt: json["verifiedAt"] != null ? DateTime.tryParse(json["verifiedAt"].toString()) : null,
@@ -1895,11 +1923,14 @@ String _safeCurrentFirebaseUid() {
 /// CNIC approval alone does NOT make a user an owner.
 bool isUserApprovedHost() {
   if (activeUserRole == "admin") return true;
+  if (currentUserVerification.isOwnerApproved || currentUserVerification.ownerStatus == "APPROVED") {
+    return true;
+  }
 
   final currentEmail = (activeUserEmail.isNotEmpty ? activeUserEmail : email).trim().toLowerCase();
   final curUid = (activeUserId.isNotEmpty ? activeUserId : _safeCurrentFirebaseUid()).trim();
 
-  // User MUST own at least one approved car (or car with pending updates) in the fleet
+  // User owns at least one approved car (or car with pending updates) in the fleet
   return allCarsList.any((c) =>
       c.isUserCar &&
       (c.isApproved || c.approvalStatus == "approved" || c.approvalStatus == "pending_update") &&
@@ -1910,6 +1941,9 @@ bool isUserApprovedHost() {
 /// Returns "approved", "pending", "rejected", or "none"
 String getUserHostApplicationStatus() {
   if (activeUserRole == "admin") return "approved";
+  if (currentUserVerification.isOwnerApproved || currentUserVerification.ownerStatus == "APPROVED") {
+    return "approved";
+  }
 
   final currentEmail = (activeUserEmail.isNotEmpty ? activeUserEmail : email).trim().toLowerCase();
   final curUid = (activeUserId.isNotEmpty ? activeUserId : _safeCurrentFirebaseUid()).trim();
@@ -1918,7 +1952,7 @@ String getUserHostApplicationStatus() {
       c.isUserCar &&
       (c.isOwnedBy(currentEmail) || (curUid.isNotEmpty && c.ownerId == curUid))).toList();
 
-  // 1. Mandatory requirement: User MUST have at least one approved car
+  // 1. Requirement: User has at least one approved car
   if (myCars.any((c) => c.approvalStatus == "approved" || c.approvalStatus == "pending_update" || c.isApproved)) {
     return "approved";
   }

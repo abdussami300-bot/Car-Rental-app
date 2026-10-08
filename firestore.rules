@@ -48,18 +48,25 @@ service cloud.firestore {
       // Other authenticated users can only read Host/Admin profiles to render host names and verified badges.
       allow read: if isUser(userId) || isAdmin() || (isAuthenticated() && resource.data.role in ['owner', 'admin']);
 
-      // Users can only create their own profile initially (non-admin role, non-verified status)
+      // Users can only create their own profile initially (starts as customer role, non-verified)
       allow create: if isUser(userId) &&
-        (!('role' in request.resource.data) || request.resource.data.role in ['customer', 'owner']) &&
+        (!('role' in request.resource.data) || request.resource.data.role == 'customer') &&
+        (!('ownerStatus' in request.resource.data) || request.resource.data.ownerStatus in ['NOT_APPLIED', 'PENDING_REVIEW']) &&
+        (!('isOwnerApproved' in request.resource.data) || request.resource.data.isOwnerApproved == false) &&
         (!('verificationStatus' in request.resource.data) || request.resource.data.verificationStatus in ['unverified', 'pending']) &&
         (!('isVerified' in request.resource.data) || request.resource.data.isVerified == false);
 
-      // Admins can update any user's verification status
-      // Normal users can only update their own profile and submit documents as 'pending', but CANNOT self-approve
+      // Admins can update any user's profile and statuses.
+      // Normal users can only update their own profile and submit documents for review, but CANNOT self-approve
       allow update: if isAdmin() || (
         isUser(userId) &&
-        (!('role' in request.resource.data) || request.resource.data.role in ['customer', 'owner']) &&
-        (!('verificationStatus' in request.resource.data) || request.resource.data.verificationStatus in ['unverified', 'pending']) &&
+        (!('isOwnerApproved' in request.resource.data) || request.resource.data.isOwnerApproved == false || request.resource.data.isOwnerApproved == resource.data.isOwnerApproved) &&
+        (!('ownerStatus' in request.resource.data) || request.resource.data.ownerStatus in ['NOT_APPLIED', 'PENDING_REVIEW'] || request.resource.data.ownerStatus == resource.data.ownerStatus) &&
+        (!('role' in request.resource.data) || request.resource.data.role == resource.data.role || request.resource.data.role == 'customer') &&
+        // CNIC and License numbers are IMMUTABLE once saved
+        (!('cnicNumber' in resource.data) || resource.data.cnicNumber == '' || request.resource.data.cnicNumber == resource.data.cnicNumber) &&
+        (!('licenseNumber' in resource.data) || resource.data.licenseNumber == '' || request.resource.data.licenseNumber == resource.data.licenseNumber) &&
+        (!('verificationStatus' in request.resource.data) || request.resource.data.verificationStatus in ['unverified', 'pending'] || request.resource.data.verificationStatus == resource.data.verificationStatus) &&
         (!('isVerified' in request.resource.data) || request.resource.data.isVerified == false || request.resource.data.isVerified == resource.data.isVerified) &&
         (!('isHostVerified' in request.resource.data) || request.resource.data.isHostVerified == false || request.resource.data.isHostVerified == resource.data.isHostVerified)
       );
@@ -271,6 +278,15 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (isEmail(resource.data.userEmail) || isAdmin());
       allow create: if isAuthenticated() && isEmail(request.resource.data.userEmail);
       allow update, delete: if isAdmin();
+    }
+
+    // ==========================================
+    // 10. AUDIT LOGS COLLECTION
+    // ==========================================
+    match /audit_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() || isAuthenticated();
+      allow update, delete: if false; // Immutable audit trail
     }
   }
 }

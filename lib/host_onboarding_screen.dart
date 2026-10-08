@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -119,7 +120,11 @@ class _HostOnboardingScreenState extends State<HostOnboardingScreen> {
         final phone = (data['phone'] ?? data['phoneNumber'] ?? '').toString().trim();
 
         if (phone.isNotEmpty && _phoneController.text.isEmpty) {
-          _phoneController.text = phone;
+          String cleanPhone = phone.replaceAll(RegExp(r'\D'), '');
+          if (cleanPhone.startsWith("923")) cleanPhone = cleanPhone.substring(2);
+          if (cleanPhone.startsWith("03")) cleanPhone = cleanPhone.substring(2);
+          if (cleanPhone.length > 9) cleanPhone = cleanPhone.substring(0, 9);
+          _phoneController.text = cleanPhone;
         }
 
         if (cnic.isNotEmpty && (cFront.isNotEmpty || cBack.isNotEmpty)) {
@@ -314,7 +319,7 @@ class _HostOnboardingScreenState extends State<HostOnboardingScreen> {
                               borderRadius: BorderRadius.circular(8),
                               child: _cnicFrontFile != null
                                   ? Image.file(_cnicFrontFile!, fit: BoxFit.cover)
-                                  : Image.network(_cnicFrontUrl!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.badge, color: Colors.white54)),
+                                  : Image.network(_cnicFrontUrl!, fit: BoxFit.cover, errorBuilder: (_, _, _) => const Icon(Icons.badge, color: Colors.white54)),
                             ),
                           ),
                         ),
@@ -332,7 +337,7 @@ class _HostOnboardingScreenState extends State<HostOnboardingScreen> {
                               borderRadius: BorderRadius.circular(8),
                               child: _cnicBackFile != null
                                   ? Image.file(_cnicBackFile!, fit: BoxFit.cover)
-                                  : Image.network(_cnicBackUrl!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.badge, color: Colors.white54)),
+                                  : Image.network(_cnicBackUrl!, fit: BoxFit.cover, errorBuilder: (_, _, _) => const Icon(Icons.badge, color: Colors.white54)),
                             ),
                           ),
                         ),
@@ -352,9 +357,13 @@ class _HostOnboardingScreenState extends State<HostOnboardingScreen> {
             TextFormField(
               controller: _cnicController,
               keyboardType: TextInputType.number,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                CnicInputFormatter(),
+              ],
               style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
-                hintText: "e.g. 35201-1234567-1",
+                hintText: "12345-1234567-1",
                 hintStyle: const TextStyle(color: Colors.grey),
                 filled: true,
                 fillColor: const Color(0xFF1E1E1E),
@@ -447,15 +456,53 @@ class _HostOnboardingScreenState extends State<HostOnboardingScreen> {
           const SizedBox(height: 6),
           TextFormField(
             controller: _phoneController,
-            keyboardType: TextInputType.phone,
-            style: const TextStyle(color: Colors.white),
+            keyboardType: TextInputType.number,
+            style: const TextStyle(color: Colors.white, fontSize: 15, letterSpacing: 1.2),
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(9),
+            ],
             decoration: InputDecoration(
-              hintText: "e.g. 03001234567",
-              hintStyle: const TextStyle(color: Colors.grey),
+              hintText: "123456789",
+              hintStyle: const TextStyle(color: Colors.white30),
               filled: true,
               fillColor: const Color(0xFF1E1E1E),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-              prefixIcon: const Icon(Icons.phone, color: AppTheme.primary),
+              prefixIcon: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.phone, color: AppTheme.primary, size: 20),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: AppTheme.primary.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.4), width: 0.8),
+                      ),
+                      child: const Text(
+                        "03",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                          letterSpacing: 1.0,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      height: 20,
+                      width: 1,
+                      color: Colors.white24,
+                    ),
+                  ],
+                ),
+              ),
+              helperText: "First 2 digits (03) are fixed. Enter remaining 9 digits.",
+              helperStyle: const TextStyle(color: Colors.grey, fontSize: 11),
             ),
           ),
           const SizedBox(height: 16),
@@ -591,14 +638,17 @@ class _HostOnboardingScreenState extends State<HostOnboardingScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text("Number Plate", style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
+                    const Text("Number Plate (Max 3 Letters - Max 4 Digits)", style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
                     TextFormField(
                       controller: _regNumberController,
                       textCapitalization: TextCapitalization.characters,
-                      style: const TextStyle(color: Colors.white),
+                      inputFormatters: [
+                        NumberPlateInputFormatter(),
+                      ],
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 1),
                       decoration: InputDecoration(
-                        hintText: "e.g. LEB-23-4521",
+                        hintText: "LEA-1234",
                         hintStyle: const TextStyle(color: Colors.grey),
                         filled: true,
                         fillColor: const Color(0xFF1E1E1E),
@@ -1316,6 +1366,16 @@ class _HostOnboardingScreenState extends State<HostOnboardingScreen> {
           'onAction': () => _pickImage((f) => setState(() => _cnicBackFile = f)),
         });
       }
+      if (_phoneController.text.trim().isNotEmpty && _phoneController.text.trim().length != 9) {
+        missing.add({
+          'title': 'Contact Phone Number',
+          'subtitle': 'Please enter exactly 9 digits after fixed 03',
+          'icon': Icons.phone,
+          'actionLabel': 'Fix',
+          'step': 0,
+          'onAction': null,
+        });
+      }
       if (missing.isNotEmpty) {
         _showMissingDetailsDialog(missing);
         return;
@@ -1429,6 +1489,16 @@ class _HostOnboardingScreenState extends State<HostOnboardingScreen> {
           'onAction': null,
         });
       }
+      if (_phoneController.text.trim().isNotEmpty && _phoneController.text.trim().length != 9) {
+        allMissing.add({
+          'title': 'Contact Phone Number',
+          'subtitle': 'Please enter exactly 9 digits after fixed 03',
+          'icon': Icons.phone,
+          'actionLabel': 'Fix',
+          'step': 0,
+          'onAction': null,
+        });
+      }
 
       if (allMissing.isNotEmpty) {
         _showMissingDetailsDialog(allMissing);
@@ -1460,49 +1530,43 @@ class _HostOnboardingScreenState extends State<HostOnboardingScreen> {
       if (_carInteriorFile != null) photosMap["interior"] = _carInteriorFile!.path;
       if (_carRegDocFile != null) photosMap["registration_doc"] = _carRegDocFile!.path;
 
-      // 2. Save CNIC to user profile if entered freshly
-      if (!_hasExistingCnic && _cnicController.text.isNotEmpty) {
-        final cnicNum = _cnicController.text.trim();
-        final localFront = _cnicFrontFile?.path ?? "";
-        final localBack = _cnicBackFile?.path ?? "";
+      // 2. Prepare CNIC credentials & verification data
+      final cnicNum = _cnicController.text.trim().isNotEmpty
+          ? _cnicController.text.trim()
+          : currentUserVerification.cnicNumber;
+      final localFront = _cnicFrontFile?.path ?? _cnicFrontUrl ?? currentUserVerification.cnicFrontPath;
+      final localBack = _cnicBackFile?.path ?? _cnicBackUrl ?? currentUserVerification.cnicBackPath;
 
-        // Upload verification files to cloud storage / base64 data URI
-        Map<String, String> uploadedDocs = {};
-        if (user != null) {
-          try {
-            uploadedDocs = await StorageService.uploadVerificationDocs(
-              uid: user.uid,
-              cnicFrontPath: _cnicFrontFile?.path,
-              cnicBackPath: _cnicBackFile?.path,
-              licenseImagePath: null,
-            );
-          } catch (e) {
-            debugPrint("⚠️ Failed to upload CNIC docs during onboarding: $e");
-          }
-        }
-
-        final cloudFront = uploadedDocs['cnicFront'] ?? localFront;
-        final cloudBack = uploadedDocs['cnicBack'] ?? localBack;
-
-        currentUserVerification = VerificationData(
-          cnicNumber: cnicNum,
-          cnicFrontPath: cloudFront,
-          cnicBackPath: cloudBack,
-          status: "pending",
-          submittedAt: DateTime.now(),
-        );
-        await saveVerificationToLocalStorage();
-
-        if (user != null) {
-          await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-            "cnicNumber": cnicNum,
-            "cnicFrontUrl": cloudFront,
-            "cnicBackUrl": cloudBack,
-            "verificationStatus": "pending",
-            "verificationSubmittedAt": FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
+      // Upload verification files to cloud storage / base64 data URI if fresh local files picked
+      Map<String, String> uploadedDocs = {};
+      if (user != null && (_cnicFrontFile != null || _cnicBackFile != null)) {
+        try {
+          uploadedDocs = await StorageService.uploadVerificationDocs(
+            uid: user.uid,
+            cnicFrontPath: _cnicFrontFile?.path,
+            cnicBackPath: _cnicBackFile?.path,
+            licenseImagePath: null,
+          );
+        } catch (e) {
+          debugPrint("⚠️ Failed to upload CNIC docs during onboarding: $e");
         }
       }
+
+      final cloudFront = uploadedDocs['cnicFront'] ?? localFront;
+      final cloudBack = uploadedDocs['cnicBack'] ?? localBack;
+
+      currentUserVerification = VerificationData(
+        cnicNumber: cnicNum,
+        cnicFrontPath: cloudFront,
+        cnicBackPath: cloudBack,
+        licenseNumber: currentUserVerification.licenseNumber,
+        licenseExpiry: currentUserVerification.licenseExpiry,
+        licenseImagePath: currentUserVerification.licenseImagePath,
+        status: "pending",
+        isHostVerified: false,
+        submittedAt: DateTime.now(),
+      );
+      await saveVerificationToLocalStorage();
 
       // 3. Create the CarItem marked as pending approval
       final brand = _brandController.text.trim();
@@ -1543,6 +1607,7 @@ class _HostOnboardingScreenState extends State<HostOnboardingScreen> {
       await saveCarsToLocalStorage();
 
       // Convert photos to portable cloud URLs or Base64 URIs before saving to Firestore
+      CarItem carToSave = newCar;
       if (photosMap.isNotEmpty) {
         final cloudPhotos = await StorageService.uploadCarPhotos(carId: carId, photos: photosMap);
         if (cloudPhotos.isNotEmpty) {
@@ -1575,30 +1640,44 @@ class _HostOnboardingScreenState extends State<HostOnboardingScreen> {
             allCarsList[idx] = syncedCar;
             await saveCarsToLocalStorage();
           }
-          await FirestoreService.saveCarToFirestore(syncedCar);
-          if (user != null) {
-            await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-              "hostCar": syncedCar.toJson(),
-              "hostCarId": syncedCar.id,
-            }, SetOptions(merge: true));
-          }
-        } else {
-          await FirestoreService.saveCarToFirestore(newCar);
-          if (user != null) {
-            await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-              "hostCar": newCar.toJson(),
-              "hostCarId": newCar.id,
-            }, SetOptions(merge: true));
-          }
+          carToSave = syncedCar;
         }
-      } else {
-        await FirestoreService.saveCarToFirestore(newCar);
-        if (user != null) {
-          await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-            "hostCar": newCar.toJson(),
-            "hostCarId": newCar.id,
-          }, SetOptions(merge: true));
+      }
+
+      await FirestoreService.saveCarToFirestore(carToSave);
+
+      // Save user profile with role 'owner', requestedRole 'owner', and pending verification status
+      if (user != null) {
+        final existingCnic = currentUserVerification.cnicNumber.trim();
+        final finalCnic = existingCnic.isNotEmpty ? existingCnic : cnicNum;
+
+        final Map<String, dynamic> userHostData = {
+          "role": "customer", // Remains customer until approved by admin
+          "requestedRole": "owner",
+          "ownerStatus": "PENDING_REVIEW",
+          "isOwnerApproved": false,
+          "isHostRequested": true,
+          "isHostVerified": false,
+          "verificationStatus": "pending",
+          "cnicStatus": existingCnic.isNotEmpty ? "UPDATED_REVIEW_REQUIRED" : "PENDING_REVIEW",
+          "verificationSubmittedAt": FieldValue.serverTimestamp(),
+          "hostCar": carToSave.toJson(),
+          "hostCarId": carToSave.id,
+        };
+        if (finalCnic.isNotEmpty) userHostData["cnicNumber"] = finalCnic;
+        if (cloudFront.isNotEmpty) userHostData["cnicFrontUrl"] = cloudFront;
+        if (cloudBack.isNotEmpty) userHostData["cnicBackUrl"] = cloudBack;
+        final enteredPhone = _phoneController.text.trim();
+        if (enteredPhone.isNotEmpty) {
+          final fullPhone = "03$enteredPhone";
+          userHostData["phone"] = fullPhone;
+          userHostData["phoneNumber"] = fullPhone;
         }
+
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set(
+          userHostData,
+          SetOptions(merge: true),
+        );
       }
 
       setState(() => _isSubmitting = false);

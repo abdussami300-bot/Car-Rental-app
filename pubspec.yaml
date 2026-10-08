@@ -41,6 +41,7 @@ dependencies:
   cloud_firestore: ^5.6.5
   firebase_storage: ^12.4.10
   http: ^1.2.0
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:
@@ -98,3 +99,6 @@ flutter:
   assets:
       - images/car.webp
       - images/p2.png
+      - images/sayyarah-logo.png
+      - images/sayyarah-icon.png
+      - images/whatsapp-logo.png

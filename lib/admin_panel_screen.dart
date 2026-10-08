@@ -752,7 +752,14 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
             return false;
           }
           // Role filter
-          if (_roleFilter != "all" && item['role'] != _roleFilter) {
+          final isItemOwner = item['role'] == 'owner' ||
+              item['requestedRole'] == 'owner' ||
+              item['isHostRequested'] == true ||
+              item['hostCar'] != null;
+          if (_roleFilter == "owner" && !isItemOwner) {
+            return false;
+          }
+          if (_roleFilter == "customer" && isItemOwner) {
             return false;
           }
           // Search query
@@ -885,7 +892,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                       )
                     : ListView.separated(
                         itemCount: filteredList.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 14),
+                        separatorBuilder: (_, _) => const SizedBox(height: 14),
                         itemBuilder: (context, index) {
                           final item = filteredList[index];
                           return _buildRequestRowCard(item);
@@ -952,7 +959,10 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     final name = (item['name'] ?? 'Unknown User').toString();
     final email = (item['email'] ?? '').toString();
     final role = (item['role'] ?? 'customer').toString().toLowerCase();
-    final isOwner = role == 'owner';
+    final isOwner = role == 'owner' ||
+        item['requestedRole'] == 'owner' ||
+        item['isHostRequested'] == true ||
+        item['hostCar'] != null;
     final status = (item['verificationStatus'] ?? 'pending').toString().toLowerCase();
     final cnic = (item['cnicNumber'] ?? '').toString();
     final rejectionReason = (item['rejectionReason'] ?? '').toString();
@@ -1043,7 +1053,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                             ),
                           ),
                         ),
-                        if (item['hostCar'] is Map) ...[
+                        if (isOwner && item['hostCar'] is Map && ((item['hostCar'] as Map)['name'] ?? '').toString().isNotEmpty) ...[
                           const SizedBox(width: 8),
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -1192,7 +1202,10 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
   void _handleApprove(Map<String, dynamic> item) async {
     final name = item['name'] ?? 'User';
     final userId = item['uid'] ?? '';
-    final isOwner = item['role'] == 'owner';
+    final isOwner = item['role'] == 'owner' ||
+        item['requestedRole'] == 'owner' ||
+        item['isHostRequested'] == true ||
+        item['hostCar'] != null;
 
     bool? approveAttachedCars;
 
@@ -1279,7 +1292,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         userId: userId,
         adminId: FirebaseAuth.instance.currentUser?.uid ?? "admin",
         isOwner: isOwner,
-        approveAttachedCars: approveAttachedCars ?? false,
+        approveAttachedCars: approveAttachedCars,
       );
 
       if (mounted) {
@@ -1462,7 +1475,10 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
   void _openDocumentsModal(Map<String, dynamic> item) {
     final name = item['name'] ?? 'User';
     final role = (item['role'] ?? 'customer').toString().toLowerCase();
-    final isOwner = role == 'owner';
+    final isOwner = role == 'owner' ||
+        item['requestedRole'] == 'owner' ||
+        item['isHostRequested'] == true ||
+        item['hostCar'] != null;
     final cnic = item['cnicNumber'] ?? '';
     final cnicFront = item['cnicFrontUrl'] ?? '';
     final cnicBack = item['cnicBackUrl'] ?? '';
@@ -2860,7 +2876,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         return Image.memory(
           bytes,
           fit: fit,
-          errorBuilder: (_, __, ___) => Container(
+          errorBuilder: (_, _, _) => Container(
             color: const Color(0xFF252525),
             child: const Icon(Icons.broken_image, color: Colors.grey, size: 28),
           ),
@@ -2885,7 +2901,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
             ),
           );
         },
-        errorBuilder: (_, __, ___) => Container(
+        errorBuilder: (_, _, _) => Container(
           color: const Color(0xFF252525),
           child: const Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -2904,7 +2920,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       return Image.asset(
         path,
         fit: fit,
-        errorBuilder: (_, __, ___) => Container(
+        errorBuilder: (_, _, _) => Container(
           color: const Color(0xFF252525),
           child: const Icon(Icons.directions_car, color: AppTheme.primary, size: 28),
         ),

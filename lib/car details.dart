@@ -359,7 +359,7 @@ class _CarDetailsState extends State<CarDetails> {
                       colorScheme: const ColorScheme.dark(
                         primary: AppTheme.primary,
                         onPrimary: Colors.white,
-                        surface: const Color(0xFF1E1E1E),
+                        surface: Color(0xFF1E1E1E),
                         onSurface: Colors.white,
                       ),
                       dialogBackgroundColor: const Color(0xFF1E1E1E),
@@ -403,7 +403,7 @@ class _CarDetailsState extends State<CarDetails> {
                       colorScheme: const ColorScheme.dark(
                         primary: AppTheme.primary,
                         onPrimary: Colors.white,
-                        surface: const Color(0xFF1E1E1E),
+                        surface: Color(0xFF1E1E1E),
                         onSurface: Colors.white,
                       ),
                       dialogBackgroundColor: const Color(0xFF1E1E1E),
@@ -982,12 +982,12 @@ class _CarDetailsState extends State<CarDetails> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(isRangeAvailable ? Icons.payment : Icons.event_busy, size: 18),
+                          Icon(isRangeAvailable ? Icons.calendar_today_outlined : Icons.event_busy, size: 18),
                           const SizedBox(width: 8),
                           FittedBox(
                             fit: BoxFit.scaleDown,
                             child: Text(
-                              isRangeAvailable ? "Proceed to Checkout" : "Dates Unavailable (Choose New Dates)",
+                              isRangeAvailable ? "Proceed to Booking" : "Dates Unavailable (Choose New Dates)",
                               style: const TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.bold,

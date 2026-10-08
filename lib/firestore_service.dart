@@ -1159,15 +1159,21 @@ class FirestoreService {
 
       for (final doc in snapshot.docs) {
         final data = doc.data();
-        final role = (data['role'] ?? 'customer').toString().toLowerCase();
+        final rawRole = (data['role'] ?? 'customer').toString().toLowerCase();
 
         // Skip admin accounts from verification request lists
-        if (role == 'admin') continue;
+        if (rawRole == 'admin') continue;
 
         final rawStatus = data['verificationStatus']?.toString().toLowerCase().trim();
         final cnic = (data['cnicNumber'] ?? '').toString().trim();
         final cnicFront = (data['cnicFrontUrl'] ?? '').toString().trim();
         final isVerifiedFlag = data['isVerified'] == true;
+        final hasHostCar = data['hostCar'] != null;
+        final isHostRequested = data['isHostRequested'] == true ||
+            data['requestedRole'] == 'owner' ||
+            rawRole == 'owner' ||
+            hasHostCar;
+        final role = isHostRequested ? 'owner' : rawRole;
 
         // Resolve normalized status
         String status = "unverified";
@@ -1175,12 +1181,12 @@ class FirestoreService {
           status = rawStatus!;
         } else if (isVerifiedFlag) {
           status = "verified";
-        } else if (cnic.isNotEmpty || cnicFront.isNotEmpty) {
+        } else if (cnic.isNotEmpty || cnicFront.isNotEmpty || isHostRequested) {
           status = "pending";
         }
 
         // Only include accounts that have started the verification process (or match filter)
-        if (status == "unverified" && cnic.isEmpty && cnicFront.isEmpty) {
+        if (status == "unverified" && cnic.isEmpty && cnicFront.isEmpty && !isHostRequested) {
           continue;
         }
 
@@ -1194,6 +1200,8 @@ class FirestoreService {
         item['name'] = (data['name'] ?? 'User').toString();
         item['email'] = (data['email'] ?? '').toString();
         item['role'] = role;
+        item['requestedRole'] = data['requestedRole'] ?? (isHostRequested ? 'owner' : 'customer');
+        item['isHostRequested'] = isHostRequested;
         item['cnicNumber'] = cnic;
         item['cnicFrontUrl'] = cnicFront;
         item['cnicBackUrl'] = (data['cnicBackUrl'] ?? '').toString();
@@ -1206,12 +1214,16 @@ class FirestoreService {
         final uEmail = (data['email'] ?? '').toString().trim().toLowerCase();
         final uUid = doc.id.trim();
         Map<String, dynamic>? hostCarMap;
-        for (final car in allCarsList) {
-          if (car.isUserCar &&
-              ((uUid.isNotEmpty && car.ownerId == uUid) ||
-               (uEmail.isNotEmpty && car.ownerEmail.trim().toLowerCase() == uEmail))) {
-            hostCarMap = car.toJson();
-            break;
+        if (data['hostCar'] is Map) {
+          hostCarMap = Map<String, dynamic>.from(data['hostCar'] as Map);
+        } else {
+          for (final car in allCarsList) {
+            if (car.isUserCar &&
+                ((uUid.isNotEmpty && car.ownerId == uUid) ||
+                 (uEmail.isNotEmpty && car.ownerEmail.trim().toLowerCase() == uEmail))) {
+              hostCarMap = car.toJson();
+              break;
+            }
           }
         }
         item['hostCar'] = hostCarMap;
